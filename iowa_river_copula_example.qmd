@@ -560,7 +560,7 @@ xy50 <- grDevices::contourLines(x, y, z, levels = mu * rp_50)
 
 if (length(xy50) == 0) stop("No contour found for RP = ", rp_50)
 
-df_cl_A_50 <- do.call(rbind, lapply(seq_along(xy50), function(i){
+contourLines_A_50 <- do.call(rbind, lapply(seq_along(xy50), function(i){
   data.frame(id=i, level=xy50[[i]]$level, marshalltown_cdf=xy50[[i]]$x, marengo_cdf=xy50[[i]]$y, rp = rp_50)
 }))
 
@@ -568,7 +568,7 @@ df_cl_A_50 <- do.call(rbind, lapply(seq_along(xy50), function(i){
 rp_100 <- 100
 xy100 <- grDevices::contourLines(x, y, z, levels = mu * rp_100)
 
-df_cl_A_100 <- do.call(rbind, lapply(seq_along(xy100), function(i){
+contourLines_A_100 <- do.call(rbind, lapply(seq_along(xy100), function(i){
   data.frame(id=i, level=xy100[[i]]$level, marshalltown_cdf=xy100[[i]]$x, marengo_cdf=xy100[[i]]$y, rp = rp_100)
 }))
 ```
@@ -591,7 +591,7 @@ xy50 <- grDevices::contourLines(x, y, z, levels = mu * rp_50)
 
 if (length(xy50) == 0) stop("No contour found for RP = ", rp_50)
 
-df_cl_B_50 <- do.call(rbind, lapply(seq_along(xy50), function(i){
+contourLines_B_50 <- do.call(rbind, lapply(seq_along(xy50), function(i){
   data.frame(id=i, level=xy50[[i]]$level, marshalltown_cdf=xy50[[i]]$x, marengo_cdf=xy50[[i]]$y, rp = rp_50)
 }))
 
@@ -599,7 +599,7 @@ df_cl_B_50 <- do.call(rbind, lapply(seq_along(xy50), function(i){
 rp_100 <- 100
 xy100 <- grDevices::contourLines(x, y, z, levels = mu * rp_100)
 
-df_cl_B_100 <- do.call(rbind, lapply(seq_along(xy100), function(i){
+contourLines_B_100 <- do.call(rbind, lapply(seq_along(xy100), function(i){
   data.frame(id=i, level=xy100[[i]]$level, marshalltown_cdf=xy100[[i]]$x, marengo_cdf=xy100[[i]]$y, rp = rp_100)
 }))
 ```
@@ -622,11 +622,11 @@ langbein_adjustment <- function(lambda, p_pds) {
 
 ```{r}
 
-df_cl_A <- rbind(df_cl_A_50, df_cl_A_100)
-p_pds <- df_cl_A$marshalltown_cdf
-p_marshalltown_A <- langbein_adjustment(rate_marshalltown, p_pds)
+contourLines_A <- rbind(contourLines_A_50, contourLines_A_100)
+p_pds <- contourLines_A$marshalltown_cdf
+p_marshalltown_A <- langbein_adjustment(rate_marshalltown, p_pds) # Annualized probabilities for Marshalltown
 
-df_cl_A <- df_cl_A %>%
+contourLines_A <- contourLines_A %>%
   mutate(marshalltown_annualized_p = p_marshalltown_A,
          marshalltown = quagev(marshalltown_annualized_p, marshalltown_gev),
          marengo = quaglo(marengo_cdf, marengo_glo),
@@ -636,11 +636,12 @@ df_cl_A <- df_cl_A %>%
 ### Scenario B Transform Variates
 
 ```{r}
-df_cl_AB<- rbind(df_cl_B_50, df_cl_B_100)
-p_pds <- df_cl_B$marengo_cdf
-p_marengo_B <- langbein_adjustment(rate_marengo, p_pds)
 
-df_cl_B <- df_cl_B %>%
+contourLines_B <- rbind(contourLines_B_50, contourLines_A_100)
+p_pds <- contourLines_B$marengo_cdf
+p_marengo_B <- langbein_adjustment(rate_marengo, p_pds) # Annualized probabilities for Marengo
+
+contourLines_B <- contourLines_B %>%
   mutate(marengo_annualized_p = p_marengo_B,
          marengo = quagev(marengo_annualized_p, marengo_gev),
          marshalltown = quaglo(marshalltown_cdf, marshalltown_glo),
@@ -651,7 +652,7 @@ df_cl_B <- df_cl_B %>%
 
 ```{r}
 
-ggplot(df_cl_A, aes(marshalltown, marengo, group = rp)) +
+ggplot(contourLines_A, aes(marshalltown, marengo, group = rp)) +
   geom_path(linewidth = 1) +
   theme_bw() +
   xlab("Marshalltown Flow (cfs)") +
@@ -661,7 +662,7 @@ ggplot(df_cl_A, aes(marshalltown, marengo, group = rp)) +
   ylim(0, 40000) +
   coord_fixed(ratio = 1)
 
-ggplot(df_cl_B, aes(marengo, marshalltown, group = rp)) +
+ggplot(contourLines_B, aes(marengo, marshalltown, group = rp)) +
   geom_path(linewidth = 1) +
   theme_bw() +
   xlab("Marengo Flow (cfs)") +
@@ -671,15 +672,15 @@ ggplot(df_cl_B, aes(marengo, marshalltown, group = rp)) +
   ylim(0, 50000) +
   coord_fixed(ratio = 1)
 
-df_cl_A_join <- df_cl_A %>%
+contourLines_A_common_cols <- contourLines_A %>%
   select(rp, marshalltown, marengo, scenario)
 
-df_cl_B_join <- df_cl_B %>%
+contourLines_B_common_cols <- contourLines_B %>%
   select(rp, marshalltown, marengo, scenario)
 
-df_cl <- rbind(df_cl_A_join, df_cl_B_join)
+contourLines <- rbind(contourLines_A_common_cols, contourLines_B_common_cols)
 
-ggplot(df_cl, aes(marshalltown, marengo, color = scenario, linetype = factor(rp))) +
+ggplot(contourLines, aes(marshalltown, marengo, color = scenario, linetype = factor(rp))) +
   geom_path(linewidth = 1) +
     scale_color_manual(values = c(
     "A" = "darkgreen",
@@ -697,7 +698,7 @@ ggplot(df_cl, aes(marshalltown, marengo, color = scenario, linetype = factor(rp)
   coord_fixed(ratio = 1)
 
 # View 1/100 joint probability contour from scenario A
-df_cl[df_cl$scenario == "A" & df_cl$rp == "100", ]
+contourLines[contourLines$scenario == "A" & contourLines$rp == "100", ]
 ```
 
 # Combine Isolines
@@ -706,115 +707,80 @@ df_cl[df_cl$scenario == "A" & df_cl$rp == "100", ]
 
 # Helper 1: combine two isolines into one envelope + resample to fixed resolution
 combine_isolines <- function(P1, P2,
-                             type = c("Combined", "Con1", "Con2"),
                              dec = 2,
                              interval = 10000,
                              end = FALSE,
-                             thres1 = NA, thres2 = NA,
-                             con1_name = "Var1", con2_name = "Var2") {
+                             type = c("Combined", "Con1", "Con2"),
+                             thres1 = NA, thres2 = NA) {
   type <- match.arg(type)
 
-  stopifnot(is.data.frame(P1), ncol(P1) == 2, is.data.frame(P2), ncol(P2) == 2)
-
-  # Standardize column names for internal work
   colnames(P1) <- c("x", "y")
   colnames(P2) <- c("x", "y")
 
-  # Global ranges (as in the original code: include Data too; caller can pass that in if needed)
-  x_min <- min(c(P1$x, P2$x), na.rm = TRUE)
-  x_max <- max(c(P1$x, P2$x), na.rm = TRUE)
-  y_min <- min(c(P1$y, P2$y), na.rm = TRUE)
-  y_max <- max(c(P1$y, P2$y), na.rm = TRUE)
-
   step <- 10^-dec
 
-  # --- A) envelope using x-grid: y(x) = max(y from P1 at x, y from P2 at x)
-  x_grid <- round(seq(x_min, x_max, by = step), dec)
+  # helper: at each grid value, take the max value from either curve
+  envelope_on_grid <- function(grid, P1_key, P1_val, P2_key, P2_val) {
+    P1k <- round(P1_key, dec)
+    P2k <- round(P2_key, dec)
 
-  P1x <- round(P1$x, dec)
-  P2x <- round(P2$x, dec)
+    out <- vapply(grid, function(g) {
+      v <- c(P1_val[P1k == g], P2_val[P2k == g])
+      m <- suppressWarnings(max(v, na.rm = TRUE))
+      if (is.infinite(m)) NA_real_ else m
+    }, numeric(1))
 
-  y_on_x <- vapply(x_grid, function(xx) {
-    y1 <- P1$y[P1x == xx]
-    y2 <- P2$y[P2x == xx]
-    # original code uses max(...) across available values; if none -> -Inf
-    out <- max(c(y1, y2), na.rm = TRUE)
-    if (is.infinite(out)) NA_real_ else out
-  }, numeric(1))
+    out
+  }
 
-  ptsA <- data.frame(x = x_grid, y = y_on_x)
-  ptsA <- ptsA[!is.na(ptsA$y), , drop = FALSE]
+  # 1) Build envelope points from an x-grid and a y-grid
+  x_grid <- round(seq(min(c(P1$x, P2$x), na.rm = TRUE),
+                      max(c(P1$x, P2$x), na.rm = TRUE),
+                      by = step), dec)
+  y_grid <- round(seq(min(c(P1$y, P2$y), na.rm = TRUE),
+                      max(c(P1$y, P2$y), na.rm = TRUE),
+                      by = step), dec)
 
-  # --- B) envelope using y-grid: x(y) = max(x from P1 at y, x from P2 at y)
-  y_grid <- round(seq(y_min, y_max, by = step), dec)
+  y_on_x <- envelope_on_grid(x_grid, P1$x, P1$y, P2$x, P2$y)     # y(x) = max
+  x_on_y <- envelope_on_grid(y_grid, P1$y, P1$x, P2$y, P2$x)     # x(y) = max
 
-  P1y <- round(P1$y, dec)
-  P2y <- round(P2$y, dec)
-
-  x_on_y <- vapply(y_grid, function(yy) {
-    x1 <- P1$x[P1y == yy]
-    x2 <- P2$x[P2y == yy]
-    out <- max(c(x1, x2), na.rm = TRUE)
-    if (is.infinite(out)) NA_real_ else out
-  }, numeric(1))
-
-  ptsB <- data.frame(x = x_on_y, y = y_grid)
-  ptsB <- ptsB[!is.na(ptsB$x), , drop = FALSE]
-
-  # --- C) merge, round, de-duplicate by x, sort by x (matches the original spirit)
-  pts <- rbind(ptsA, ptsB)
+  pts <- rbind(
+    data.frame(x = x_grid, y = y_on_x),
+    data.frame(x = x_on_y, y = y_grid)
+  )
+  pts <- pts[complete.cases(pts), ]
   pts$x <- round(pts$x, dec)
   pts$y <- round(pts$y, dec)
 
-  pts <- pts[!duplicated(pts$x), , drop = FALSE]
-  pts <- pts[order(pts$x), , drop = FALSE]
-
-  # Optional endpoints (only done in the original code for Combined)
+  # 2) Optionally force endpoints (only for Combined in original code)
   if (isTRUE(end) && type == "Combined") {
-    # original: rbind(con2 first, pts, con1 last)
-    first <- P2[1, c("x", "y"), drop = FALSE]
-    last  <- P1[nrow(P1), c("x", "y"), drop = FALSE]
-    pts <- rbind(first, pts, last)
+    pts <- rbind(P2[1, ], pts, P1[nrow(P1), ])
     pts$x <- round(pts$x, dec)
     pts$y <- round(pts$y, dec)
-    pts <- pts[order(pts$x), , drop = FALSE]
   }
 
-  # --- D) resample along arc length to exactly `interval` points
-  # Normalize to [0,1] to make x/y comparable for distance calculation
+  # 3) Sort & de-duplicate by x (same spirit as original)
+  pts <- pts[order(pts$x), ]
+  pts <- pts[!duplicated(pts$x), ]
+
+  # 4) Resample to `interval` points along arc length
   x01 <- (pts$x - min(pts$x)) / (max(pts$x) - min(pts$x))
   y01 <- (pts$y - min(pts$y)) / (max(pts$y) - min(pts$y))
 
-  dx <- c(0, diff(x01))
-  dy <- c(0, diff(y01))
-  d  <- sqrt(dx^2 + dy^2)
-  s  <- cumsum(d)
-
-  # Handle degenerate case (all points same)
+  s <- cumsum(c(0, sqrt(diff(x01)^2 + diff(y01)^2)))
   if (max(s) == 0) {
-    Iso <- pts[rep(1, interval), , drop = FALSE]
+    Iso <- pts[rep(1, interval), ]
   } else {
     s_out <- seq(0, max(s), length.out = interval)
-    x_res <- approx(x = s, y = x01, xout = s_out, ties = "ordered")$y
-    y_res <- approx(x = s, y = y01, xout = s_out, ties = "ordered")$y
-
-    # back-transform
-    Iso <- data.frame(
-      x = x_res * (max(pts$x) - min(pts$x)) + min(pts$x),
-      y = y_res * (max(pts$y) - min(pts$y)) + min(pts$y)
-    )
+    x_out <- approx(s, pts$x, xout = s_out)$y
+    y_out <- approx(s, pts$y, xout = s_out)$y
+    Iso <- data.frame(x = x_out, y = y_out)
   }
 
-  # Threshold filtering (only present in original for Con1/Con2 types)
-  if (type == "Con1" && !is.na(thres1)) {
-    Iso <- Iso[Iso$x >= thres1, , drop = FALSE]
-  }
-  if (type == "Con2" && !is.na(thres2)) {
-    Iso <- Iso[Iso$y >= thres2, , drop = FALSE]
-  }
+  # 5) Threshold filter for Con1/Con2 types
+  if (type == "Con1" && !is.na(thres1)) Iso <- Iso[Iso$x >= thres1, ]
+  if (type == "Con2" && !is.na(thres2)) Iso <- Iso[Iso$y >= thres2, ]
 
-  # Return with original column names
-  colnames(Iso) <- c(con1_name, con2_name)
   Iso
 }
 
@@ -825,9 +791,7 @@ clB <- df_cl_B %>%
   select(marshalltown, marengo)
 
 iso <- combine_isolines(clA, clB, 
-                        type = "Combined",
-                        con1_name = "marshalltown",
-                        con2_name = "marengo")
+                        type = "Combined")
 ```
 
 ```{r}
