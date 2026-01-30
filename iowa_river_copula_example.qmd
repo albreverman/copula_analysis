@@ -326,6 +326,41 @@ marengo_con_gpa <- marengo_con %>%
          marshalltown_cdf = lmom::cdfglo(Marshalltown, marshalltown_glo))
 ```
 
+# Plot Coincident Events for Each Scenario
+
+```{r}
+
+marshalltown_con_longer <- marshalltown_con |>
+pivot_longer(cols = -Date, names_to = "series", values_to = "Gage")
+
+ggplot(marshalltown_con_longer, aes(x = Date, y = Gage, color = series)) +
+  geom_point(size = 2) +
+    geom_hline(yintercept = thresh_marshalltown, color = "red", linetype = "solid") +
+    labs(color = "Gage") + 
+  scale_color_manual(                            
+    values = c(
+      Marshalltown = "red",
+      Marengo = "black")) +
+  ylab("Flow (cfs)") +
+  ggtitle("Scenario A: Extremal Marshalltown Flows") +
+  theme_bw()
+
+marengo_con_longer <- marengo_con |>
+  pivot_longer(cols = -Date, names_to = "series", values_to = "Gage")
+
+ggplot(marengo_con_longer, aes(x = Date, y = Gage, color = series)) +
+  geom_point(size = 2) +
+    geom_hline(yintercept = thresh_marengo, color = "red", linetype = "solid") +
+    labs(color = "Gage") +
+  scale_color_manual(                            
+    values = c(
+      Marengo = "red",
+      Marshalltown = "black")) +
+  ylab("Flow (cfs)") +
+  ggtitle("Scenario B: Extremal Marengo Flows") +
+  theme_bw()
+```
+
 # Scenario A Copula Fits and Comparisons
 
 ```{r}
@@ -784,10 +819,10 @@ combine_isolines <- function(P1, P2,
   Iso
 }
 
-clA <- df_cl_A %>%
+clA <- contourLines_A %>%
   select(marshalltown, marengo)
 
-clB <- df_cl_B %>%
+clB <- contourLines_B %>%
   select(marshalltown, marengo)
 
 iso <- combine_isolines(clA, clB, 
@@ -828,5 +863,4 @@ extract_design_events_2d <- function(Iso, prediction, N_Ensemble){
 
   list(MostLikelyEvent=most, FullDependence=full, Ensemble=ens)
 }
-
 ```
