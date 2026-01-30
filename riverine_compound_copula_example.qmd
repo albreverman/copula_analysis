@@ -1,0 +1,821 @@
+---
+title: "Copula Example"
+format: html
+editor: visual
+author: Avital Breverman
+---
+
+```{r}
+rm(list = ls())
+
+library(dataRetrieval)
+library(tidyverse)
+library(POT)
+library(lmom)
+library(lmomco)
+library(VineCopula)
+library(MultiHazard)
+
+# User directory 
+dir <- "C:/Projects/Neptune/CopulaAnalysis/R"
+setwd(dir)
+```
+
+-   Download daily streamflow from two gages on the mainstem of the Iowa River
+
+-   Extract a partial duration series at each gage
+
+-   Compute rank correlation coefficient (Kendall's tau) between the two locations
+
+-   Define copula scenarios
+
+-   Fit copula models and select copula for each scenario based on Akaike Information Criterion (AIC)
+
+-   Generate samples from each copula and transform to original variable scale
+
+-   Derive isoline for specified probabilities (return periods)
+
+-   Combine isolines into envelope curve
+
+-   Compute relative density of pairs on each isoline using kernel density estimation
+
+# Functions
+
+Define custom functions.
+
+```{r}
+# Computes a time separation criterion, in days, between events in a PDS to ensure independence. Equation presented in Bulletin 17.
+# DA in sq mi
+B17_days_between <- function(DA) {
+  ceiling(5 + log(DA))
+}
+
+# Madsen annualization of Generalized Pareto distribution to Generalized Extreme Value distribution # Reference: Madsen, H., Rasmussen, P., & Rosbjerg, D. (1997). Comparison of annual maximum series and partial duration series methods for modeling extreme hydrologic events 1. At-site modeling. Water Resources Research, # 33(4), 747-757.
+madsen_annualization <- function(gpd_par, lambda) {
+  gev_xi <- gpd_par["xi"] + (gpd_par["alpha"] / gpd_par["k"]) * (1 - lambda ^ -gpd_par["k"]) # scale
+  gev_alpha <- gpd_par["alpha"] * lambda ^ -gpd_par["k"] # scale
+  gev_k <- gpd_par["k"]  
+  
+  print(gev_xi)
+  print(gev_alpha)
+  print(gev_k)
+  
+  c(xi = as.numeric(gev_xi),
+  alpha = as.numeric(gev_alpha),
+  k = as.numeric(gev_k))
+}
+```
+
+# Download Streamflow Data using dataRetrieval
+
+Download daily streamflow data for:
+
+-   Iowa River at Marshalltown, IA (05451500)
+
+-   Iowa River at Marengo, IA (05453100)
+
+NWIS is scheduled for decommission but I'm rolling with these functions for as long as I can.
+
+```{r}
+marshalltown <- "05451500"
+marengo <- "05453100"
+
+marshalltown_daily <- readNWISdv(marshalltown, "00060") %>% renameNWISColumns() %>%
+  na.omit()
+marengo_daily <- readNWISdv(marengo, "00060") %>% renameNWISColumns() %>%
+  na.omit()
+
+daily_flow_joined <- left_join(marshalltown_daily, marengo_daily, by = "Date") %>%
+  select(Date, Flow.x, Flow.y) %>%
+  rename(Marshalltown = Flow.x,
+         Marengo = Flow.y) %>%
+  na.omit()
+```
+
+# Plot Daily Streamflow
+
+```{r}
+marshalltown_plot <- ggplot(marshalltown_daily, aes(x = Date, y = Flow)) +
+  geom_line() +
+  theme_bw() +
+  xlab("") +
+  ylab("Flow (cfs)") +
+  ggtitle("Marshalltown")
+marshalltown_plot
+
+marengo_plot <- ggplot(marengo_daily, aes(x = Date, y = Flow)) +
+  geom_line() +
+  theme_bw() +
+  xlab("") +
+  ylab("Flow (cfs)") +
+  ggtitle("Marengo")
+marengo_plot
+```
+
+# Extract Marengo PDS
+
+```{r}
+# Create data frame with obs and time columns
+pot_marengo <- data.frame(
+  obs = marengo_daily$Flow,
+  time = as.numeric(marengo_daily$Date)  # Convert to numeric
+)
+
+da_marengo <- 2794 # squuare miles
+time_sep <- B17_days_between(da_marengo)
+thresh_marengo <- 10000 # cfs
+
+# Extract partial duration series
+pds_marengo <- POT::clust(data = pot_marengo,
+                              u = thresh_marengo, # threshold
+                              tim.cond = time_sep, # time separation
+                              clust.max = TRUE) # extract cluster maxima
+
+summary(pds_marengo)
+nrow(pds_marengo)
+
+# Build dataframe
+df_pds_marengo <- data.frame(pds_marengo) %>%
+  rename(Date = time,
+         Flow = obs) %>%
+  mutate(Date = as.Date(Date))  %>%
+  select(Date, Flow)
+
+# Compute rate of events
+years_marengo <-
+  as.numeric((
+    max(marengo_daily$Date) - min(marengo_daily$Date) + 1
+  ) / 365.25)
+rate_marengo <- nrow(df_pds_marengo) / years_marengo
+
+# Plot daily flow and PDS
+marengo_plot +
+  geom_hline(yintercept = thresh_marengo, linetype = "dashed") +
+  geom_point(data = df_pds_marengo, aes(x = Date, y = Flow),colour = "#A60F2D", shape = 19, size = 2) 
+```
+
+# Extract Marshalltown PDS
+
+```{r}
+# Create data frame with obs and time columns
+pot_marshalltown <- data.frame(
+  obs = marshalltown_daily$Flow,
+  time = as.numeric(marshalltown_daily$Date)  # Convert to numeric
+)
+
+da_marshalltown <- 1532 # square miles
+time_sep <- B17_days_between(da_marengo)
+thresh_marshalltown <- 5500 # cfs
+
+# Extract partial duration series
+pds_marshalltown <- POT::clust(data = pot_marshalltown,
+                              u = thresh_marshalltown, # threshold
+                              tim.cond = time_sep, # time separation
+                              clust.max = TRUE) # extract cluster maxima
+
+summary(pds_marshalltown)
+nrow(pds_marshalltown)
+
+# Build dataframe
+df_pds_marshalltown <- data.frame(pds_marshalltown) %>%
+  rename(Date = time,
+         Flow = obs) %>%
+  mutate(Date = as.Date(Date)) %>%
+  select(Date, Flow)
+
+# Compute rate of events
+years_marshalltown <-
+  as.numeric((
+    max(marshalltown_daily$Date) - min(marshalltown_daily$Date) + 1
+  ) / 365.25)
+rate_marshalltown <- nrow(df_pds_marshalltown) / years_marshalltown
+
+# Plot daily flow and PDS
+marshalltown_plot +
+  geom_hline(yintercept = thresh_marshalltown, linetype = "dashed") +
+  geom_point(data = df_pds_marshalltown, aes(x = Date, y = Flow),colour = "#A60F2D", shape = 19, size = 2) 
+```
+
+# Rank Correlation: Kendall's tau
+
+Compute rank correlation between flows at Marshalltown and Marengo using Kendall's rank correlation coefficient (Kendall's tau) over a range of lags.
+
+I computed Kendall's tau under 2 scenarios:
+
+-   Rank correlation between the PDS of Marengo flows and lagged daily flows at Marshalltown
+
+-   Rank correlation between the Marshalltown flows and lagged daily flows at Marengo
+
+In both scenarios, the Kendall's tau value was highest at a lag of 0 (flows on the same date).
+
+```{r}
+
+lag <- 5 # -5 to +5 day lags
+
+# Prepare data frame with 3 columns: Date, Variable1, Variable2
+# For auto-correlation, use same variable twice
+marengo_con <- left_join(df_pds_marengo, marshalltown_daily, by = "Date") %>%
+  select(Date, Flow.x, Flow.y) %>%
+  rename(Marengo = Flow.x,
+         Marshalltown = Flow.y) %>%
+  na.omit()
+
+head(marengo_con)
+
+# Calculate Kendall's tau at different lags
+result <- MultiHazard::Kendall_Lag(Data = marengo_con,
+                      Lags = seq(-lag, lag, 1),  # lag is applied to second named variable
+                      PLOT = TRUE, # display plot
+                      GAP = 0.1) # length of y-axis above and below max and min                                       
+
+# Extract results
+tau_values <- result$Value
+p_values <- result$Test
+
+# View tau coefficients
+print(tau_values)
+print(p_values)
+
+
+# Prepare data frame with 3 columns: Date, Variable1, Variable2
+# For auto-correlation, use same variable twice
+marshalltown_con <- left_join(df_pds_marshalltown, marengo_daily, by = "Date") %>%
+  select(Date, Flow.x, Flow.y) %>%
+    rename(Marshalltown = Flow.x,
+           Marengo = Flow.y) %>%
+  na.omit()
+
+head(marshalltown_con)
+
+# Calculate Kendall's tau at different lags
+result <- MultiHazard::Kendall_Lag(Data = marshalltown_con,
+                      Lags = seq(-lag, lag, 1),  # lag is applied to second named variable
+                      PLOT = TRUE, # display plot
+                      GAP = 0.1) # length of y-axis above and below max and min                                     
+
+# Extract results
+tau_values <- result$Value
+p_values <- result$Test
+
+# View tau coefficients
+print(tau_values)
+print(p_values)
+```
+
+The maximum tau in both scenarios occurs with a lag of 0, meaning that the coincident events should be pulled from the same date as the extremal (PDS) events.
+
+# Scenario A (Extremal Marshalltown Flows) Marginal Distributions
+
+Scenario A is defined by extremal events (PDS) at the Marshalltown gage and the coincident events at the Marengo gage. The conditioning variable is Marshalltown flows, which are conditioned on Marengo flows.
+
+Kendall's tau is max at a lag of 0 days. Therefore, use left_join to match coincident events to the date of the PDS events.
+
+```{r}
+
+ggplot(marshalltown_con, aes(x = Marshalltown, y = Marengo)) +
+    geom_point() +
+    xlab("Marshalltown PDS Flow (cfs)") + 
+    ylab("Marengo Coincident Flow (cfs)") +
+    ggtitle("Iowa River") +
+    theme_bw()
+
+# Fit marginal distributions
+marshalltown_gpa <- lmom::pelgpa(lmom::samlmu(marshalltown_con$Marshalltown)) 
+marshalltown_gev <- madsen_annualization(marshalltown_gpa, rate_marshalltown)
+marengo_glo <- lmom::pelglo(lmom::samlmu(marshalltown_con$Marengo))
+
+evplot(marshalltown_con$Marshalltown, main = "Marshalltown"); 
+# evdistq(quagev, para = marshalltown_gev)
+
+marshalltown_con_gev <- marshalltown_con %>%
+  mutate(marshalltown_cdf = lmom::cdfgev(Marshalltown, marshalltown_gev),
+         marengo_cdf = lmom::cdfglo(Marengo, marengo_glo))
+
+marshalltown_con_gpa <- marshalltown_con %>%
+  mutate(marshalltown_cdf = lmom::cdfgpa(Marshalltown, marshalltown_gpa),
+         marengo_cdf = lmom::cdfglo(Marengo, marengo_glo))
+```
+
+# Scenario B (Extremal Marengo Flows) Marginal Distributions
+
+Scenario B is defined by extremal events (PDS) at the Marengo gage and the coincident events at the Marshalltown gage. The conditioning variable is Marengo flows, which are conditioned on Marshalltown flows.
+
+```{r}
+
+ggplot(marengo_con, aes(x = Marengo, y = Marshalltown)) +
+    geom_point() +
+    xlab("Marengo PDS Flow (cfs)") + 
+    ylab("Marshalltown Coincident Flow (cfs)") +
+    ggtitle("Iowa River") +
+    theme_bw()
+
+# Fit marginal distributions
+marengo_gpa <- lmom::pelgpa(lmom::samlmu(marengo_con$Marengo)) 
+marengo_gev <- madsen_annualization(marengo_gpa, rate_marengo)
+marshalltown_glo <- lmom::pelglo(lmom::samlmu(marengo_con$Marshalltown))
+
+evplot(marshalltown_con$Marshalltown, main = "Marshalltown"); 
+# evdistq(quagev, para = marshalltown_gev)
+
+marengo_con_gev <- marengo_con %>%
+  mutate(marengo_cdf = lmom::cdfgev(Marengo, marengo_gev),
+         marshalltown_cdf = lmom::cdfglo(Marshalltown, marshalltown_glo))
+
+marengo_con_gpa <- marengo_con %>%
+  mutate(marengo_cdf = lmom::cdfgpa(Marengo, marengo_gpa),
+         marshalltown_cdf = lmom::cdfglo(Marshalltown, marshalltown_glo))
+```
+
+# Scenario A Copula Fits and Comparisons
+
+```{r}
+
+u <- pull(marshalltown_con_gpa, marshalltown_cdf)
+v <- pull(marshalltown_con_gpa, marengo_cdf)
+
+gumbel_cop <- BiCopEst(u, v, family = 4)
+print(gumbel_cop$AIC)
+plot(gumbel_cop, type = "contour", margins = "unif", main = "Gumbel", col = "blue")
+points(x=u, y=v, pch = 16)
+
+t_cop <- BiCopEst(u, v, family = 2)
+print(t_cop$AIC)
+plot(t_cop, type = "contour", margins = "unif", main = "Student's t", col = "blue")
+points(x=u, y=v, pch = 16)
+
+gauss_cop <- BiCopEst(u, v, family = 1)
+print(gauss_cop$AIC)
+plot(gauss_cop, type = "contour", margins = "unif", main = "Gaussian", col = "blue")
+points(x=u, y=v, pch = 16)
+
+clayton_cop <- BiCopEst(u, v, family = 3)
+print(clayton_cop$AIC)
+plot(clayton_cop, type = "contour", margins = "unif", main = "Clayton", col = "blue")
+points(x=u, y=v, pch = 16)
+
+frank_cop <- BiCopEst(u, v, family = 5)
+print(frank_cop$AIC)
+plot(frank_cop, type = "contour", margins = "unif", main = "Frank", col = "blue")
+points(x=u, y=v, pch = 16)
+
+joe_cop <- BiCopEst(u, v, family = 6)
+print(joe_cop$AIC)
+plot(joe_cop, type = "contour", margins = "unif", main = "Joe", col = "blue")
+points(x=u, y=v, pch = 16)
+
+# Create summary table
+copula_tbl <- dplyr::bind_rows(
+  tibble(Copula = "Gumbel",       family = gumbel_cop$family,  par = gumbel_cop$par,  par2 = gumbel_cop$par2,  AIC = gumbel_cop$AIC),
+  tibble(Copula = "Student's t",  family = t_cop$family,       par = t_cop$par,       par2 = t_cop$par2,       AIC = t_cop$AIC),
+  tibble(Copula = "Gaussian",     family = gauss_cop$family,   par = gauss_cop$par,   par2 = gauss_cop$par2,   AIC = gauss_cop$AIC),
+  tibble(Copula = "Clayton",      family = clayton_cop$family, par = clayton_cop$par, par2 = clayton_cop$par2, AIC = clayton_cop$AIC),
+  tibble(Copula = "Frank",        family = frank_cop$family,   par = frank_cop$par,   par2 = frank_cop$par2,   AIC = frank_cop$AIC),
+  tibble(Copula = "Joe",          family = joe_cop$family,     par = joe_cop$par,     par2 = joe_cop$par2,     AIC = joe_cop$AIC)
+) %>%
+  mutate(
+    dep_parameter = ifelse(is.na(par2), 
+                           sprintf("%.4f", par),
+                           sprintf("par=%.4f, par2=%.4f", par, par2))
+  ) %>%
+  select(Copula, dep_parameter, AIC) %>%
+  arrange(AIC)
+
+copula_tbl
+
+# Select the Copula with the minimum AIC (in this scenario, the Joe copula)
+marshalltown_cop <- joe_cop
+```
+
+# Scenario B Copula Fits and Comparisons
+
+```{r}
+
+u <- pull(marengo_con_gpa, marengo_cdf)
+v <- pull(marengo_con_gpa, marshalltown_cdf)
+
+gumbel_cop <- BiCopEst(u, v, family = 4)
+print(gumbel_cop$AIC)
+plot(gumbel_cop, type = "contour", margins = "unif", main = "Gumbel", col = "blue")
+points(x=u, y=v, pch = 16)
+
+t_cop <- BiCopEst(u, v, family = 2)
+print(t_cop$AIC)
+plot(t_cop, type = "contour", margins = "unif", main = "Student's t", col = "blue")
+points(x=u, y=v, pch = 16)
+
+gauss_cop <- BiCopEst(u, v, family = 1)
+print(gauss_cop$AIC)
+plot(gauss_cop, type = "contour", margins = "unif", main = "Gaussian", col = "blue")
+points(x=u, y=v, pch = 16)
+
+clayton_cop <- BiCopEst(u, v, family = 3)
+print(clayton_cop$AIC)
+plot(clayton_cop, type = "contour", margins = "unif", main = "Clayton", col = "blue")
+points(x=u, y=v, pch = 16)
+
+frank_cop <- BiCopEst(u, v, family = 5)
+print(frank_cop$AIC)
+plot(frank_cop, type = "contour", margins = "unif", main = "Frank", col = "blue")
+points(x=u, y=v, pch = 16)
+
+joe_cop <- BiCopEst(u, v, family = 6)
+print(joe_cop$AIC)
+plot(joe_cop, type = "contour", margins = "unif", main = "Joe", col = "blue")
+points(x=u, y=v, pch = 16)
+
+# Create summary table
+copula_tbl <- dplyr::bind_rows(
+  tibble(Copula = "Gumbel",       family = gumbel_cop$family,  par = gumbel_cop$par,  par2 = gumbel_cop$par2,  AIC = gumbel_cop$AIC),
+  tibble(Copula = "Student's t",  family = t_cop$family,       par = t_cop$par,       par2 = t_cop$par2,       AIC = t_cop$AIC),
+  tibble(Copula = "Gaussian",     family = gauss_cop$family,   par = gauss_cop$par,   par2 = gauss_cop$par2,   AIC = gauss_cop$AIC),
+  tibble(Copula = "Clayton",      family = clayton_cop$family, par = clayton_cop$par, par2 = clayton_cop$par2, AIC = clayton_cop$AIC),
+  tibble(Copula = "Frank",        family = frank_cop$family,   par = frank_cop$par,   par2 = frank_cop$par2,   AIC = frank_cop$AIC),
+  tibble(Copula = "Joe",          family = joe_cop$family,     par = joe_cop$par,     par2 = joe_cop$par2,     AIC = joe_cop$AIC)
+) %>%
+  mutate(
+    dep_parameter = ifelse(is.na(par2), 
+                           sprintf("%.4f", par),
+                           sprintf("par=%.4f, par2=%.4f", par, par2))
+  ) %>%
+  select(Copula, dep_parameter, AIC) %>%
+  arrange(AIC)
+
+copula_tbl
+
+# Select the Copula with the minimum AIC (in this scenario, the Joe copula)
+marengo_cop <- joe_cop
+```
+
+# Copula Simulation and Transformation
+
+## Generate Samples
+
+Generate a large number of samples (N = 10\^7). Split the number of samples across the two conditional copula models in proportion to the number of events in each dataset.
+
+```{r}
+N <- 10^7
+n_A <- nrow(marshalltown_con) # Number of coincident events in scenario A
+n_B <- nrow(marengo_con) # Number of coincident events in scenario B
+n1 <- round((N * n_A) / (n_A + n_B), 0)
+n2 <- N - n1
+
+# Simulate U(0,1)^2 from each fitted copula
+s1 <- VineCopula::BiCopSim(n1, obj = marshalltown_cop)
+s2 <- VineCopula::BiCopSim(n2, obj = marengo_cop)
+
+# plot(head(s1, 1000))
+```
+
+## Transform to Original Scale using Quantile Functions
+
+Transform the simulated uniforms to original units using quantile functions.
+
+```{r}
+# Scenario A
+marshalltown_gev <- lmomco::vec2par(marshalltown_gev, type = "gev")
+marengo_glo <- lmomco::vec2par(marengo_glo, type = "glo")
+
+marshalltown_A <- quagev(s1[1,], marshalltown_gev)
+marengo_A <- quaglo(s1[2,], marengo_glo)
+
+copula_sample_A <- data.frame(Marshalltown = marshalltown_A, Marengo = marengo_A)
+
+# Scenario B
+marengo_gev <- vec2par(marengo_gev, type = "gev")
+marshalltown_glo <- vec2par(marshalltown_glo, type = "glo")
+
+marengo_B <- quagev(s2[1,], marengo_gev)
+marshalltown_B <- quaglo(s2[2,], marshalltown_glo)
+
+copula_sample_B <- data.frame(Marshalltown = marshalltown_B, Marengo = marengo_B)
+
+# Combine samples from both scenarios; used in KDE 
+copula_sample <- rbind(copula_sample_A, copula_sample_A)
+```
+
+# Isoline Derivation
+
+## Generate Unit Square
+
+```{r}
+# Using "low" resolution here to reduce run times
+x <- c(10^(-5), seq(999.9*10^(-5), 1-(1*10^(-6)), 10^(-4)))
+y <- c(10^(-5), seq(999.9*10^(-5), 1-(1*10^(-6)), 10^(-4)))
+grid <- list(x = x, y = y)
+u <- expand.grid(x, y)
+```
+
+## Evaluate Copula CDF
+
+Evaluate the copula CDF at each point on the grid.
+
+```{r}
+# Evaluates CDF of the specified parametric copula
+uCopA <- VineCopula::BiCopCDF(u[,1], u[,2], marshalltown_cop) 
+uCopB <- VineCopula::BiCopCDF(u[,1], u[,2], marengo_cop) 
+```
+
+## Determine Return Period
+
+Determine the return period of each point on the unit square.
+
+This code block defines the sampling frequency for daily data and a function to compute the return period surface matrix for an x, y grid in column blocks.
+
+```{r}
+mu <- 365.25 # Sampling frequency for daily data
+
+# Computes return period surface matrix z on a grid of x and y values in blocks of columns
+make_z_surface_blocked <- function(x, y, Cmat, mean_waiting_time, block = 500L){
+  nx <- length(x); ny <- length(y)
+  z <- matrix(NA_real_, nrow = nx, ncol = ny) # Pre-allocate output matrix z
+
+  # Iterate over the y-axis in chunks
+  for (j0 in seq.int(1L, ny, by = block)) {
+    j1 <- min(j0 + block - 1L, ny)
+    yb <- y[j0:j1]
+
+    # denom is nx × nb (nb = block size)
+    denom <- 1 - x - rep(yb, each = nx) + as.vector(Cmat[, j0:j1, drop=FALSE])
+    z[, j0:j1] <- mean_waiting_time / matrix(denom, nrow = nx, ncol = length(yb))
+  }
+  z
+}
+```
+
+### Scenario A Return Period
+
+```{r}
+
+# Mean waiting time is the average time, in days, between events
+mean_waiting_time_A <- mu / rate_marshalltown 
+
+# Reshape into a matrix: rows correspond to x, columns correspond to y
+# IMPORTANT: expand.grid(x,y) varies x fastest, then y
+Cmat <- matrix(uCopA, nrow = length(x), ncol = length(y), byrow = FALSE)
+
+z  <- make_z_surface_blocked(x, y, Cmat, mean_waiting_time_A, block=200L)
+
+rp_50 <- 50 # return period in years
+xy50 <- grDevices::contourLines(x, y, z, levels = mu * rp_50)
+
+if (length(xy50) == 0) stop("No contour found for RP = ", rp_50)
+
+df_cl_A_50 <- do.call(rbind, lapply(seq_along(xy50), function(i){
+  data.frame(id=i, level=xy50[[i]]$level, marshalltown_cdf=xy50[[i]]$x, marengo_cdf=xy50[[i]]$y, rp = rp_50)
+}))
+
+
+rp_100 <- 100
+xy100 <- grDevices::contourLines(x, y, z, levels = mu * rp_100)
+
+df_cl_A_100 <- do.call(rbind, lapply(seq_along(xy100), function(i){
+  data.frame(id=i, level=xy100[[i]]$level, marshalltown_cdf=xy100[[i]]$x, marengo_cdf=xy100[[i]]$y, rp = rp_100)
+}))
+```
+
+### Scenario B Return Period
+
+```{r}
+
+# Mean waiting time is the average time, in days, between events
+mean_waiting_time_B <- mu / rate_marengo
+
+# Reshape into a matrix: rows correspond to x, columns correspond to y
+# IMPORTANT: expand.grid(x,y) varies x fastest, then y
+Cmat <- matrix(uCopB, nrow = length(x), ncol = length(y), byrow = FALSE)
+
+z  <- make_z_surface_blocked(x, y, Cmat, mean_waiting_time_B, block=200L)
+
+rp_50 <- 50 # return period in years
+xy50 <- grDevices::contourLines(x, y, z, levels = mu * rp_50)
+
+if (length(xy50) == 0) stop("No contour found for RP = ", rp_50)
+
+df_cl_B_50 <- do.call(rbind, lapply(seq_along(xy50), function(i){
+  data.frame(id=i, level=xy50[[i]]$level, marshalltown_cdf=xy50[[i]]$x, marengo_cdf=xy50[[i]]$y, rp = rp_50)
+}))
+
+
+rp_100 <- 100
+xy100 <- grDevices::contourLines(x, y, z, levels = mu * rp_100)
+
+df_cl_B_100 <- do.call(rbind, lapply(seq_along(xy100), function(i){
+  data.frame(id=i, level=xy100[[i]]$level, marshalltown_cdf=xy100[[i]]$x, marengo_cdf=xy100[[i]]$y, rp = rp_100)
+}))
+```
+
+## Transform Variates to Original Scale
+
+### Scenario A Transform Variates
+
+```{r}
+
+# Scenario A: Marshalltown PDS, Marengo coincident events
+
+# Langbein adjustment defines the relationship between empirical flood expectancies in the partial duration series and the probability of the correspoding flood as an annual series
+# p_pds is the partial duration non-exceedance probability, lambda is the rate of floods
+# returns the annual non-exceedance probability
+# Langbein, W. B. (1949). Annual Floods and the Partial-duration Flood Series. American Geophysical Union, 30(6), 879-881.
+langbein_adjustment <- function(lambda, p_pds) {
+  exp(-lambda * (1 - p_pds))
+}
+
+df_cl_A <- rbind(df_cl_A_50, df_cl_A_100)
+p_pds <- df_cl_A$marshalltown_cdf
+p_marshalltown_A <- langbein_adjustment(rate_marshalltown, p_pds)
+
+df_cl_A <- df_cl_A %>%
+  mutate(marshalltown_annualized_p = p_marshalltown_A,
+         marshalltown = quagev(marshalltown_annualized_p, marshalltown_gev),
+         marengo = quaglo(marengo_cdf, marengo_glo),
+         scenario = "A")
+```
+
+### Scenario B Transform Variates
+
+```{r}
+df_cl_AB<- rbind(df_cl_B_50, df_cl_B_100)
+p_pds <- df_cl_B$marengo_cdf
+p_marengo_B <- langbein_adjustment(rate_marengo, p_pds)
+
+df_cl_B <- df_cl_B %>%
+  mutate(marengo_annualized_p = p_marengo_B,
+         marengo = quagev(marengo_annualized_p, marengo_gev),
+         marshalltown = quaglo(marshalltown_cdf, marshalltown_glo),
+         scenario = "B")
+```
+
+## Plot Isolines
+
+```{r}
+
+ggplot(df_cl_A, aes(marshalltown, marengo, group = rp)) +
+  geom_path(linewidth = 1) +
+  theme_bw() +
+  xlab("Marshalltown Flow (cfs)") +
+  ylab("Marengo Flow (cfs)") +
+  ggtitle("Scenario A: Extremal Marshalltown Flows") +
+  xlim(0, 40000) +
+  ylim(0, 40000) +
+  coord_fixed(ratio = 1)
+
+ggplot(df_cl_B, aes(marengo, marshalltown, group = rp)) +
+  geom_path(linewidth = 1) +
+  theme_bw() +
+  xlab("Marengo Flow (cfs)") +
+  ylab("Marshalltown Flow (cfs)") +
+  ggtitle("Scenario B: Extremal Marengo Flows") +
+  xlim(0, 50000) +
+  ylim(0, 50000) +
+  coord_fixed(ratio = 1)
+
+df_cl_A_join <- df_cl_A %>%
+  select(rp, marshalltown, marengo, scenario)
+
+df_cl_B_join <- df_cl_B %>%
+  select(rp, marshalltown, marengo, scenario)
+
+df_cl <- rbind(df_cl_A_join, df_cl_B_join)
+
+ggplot(df_cl, aes(marshalltown, marengo, color = scenario, linetype = factor(rp))) +
+  geom_path(linewidth = 1) +
+    scale_color_manual(values = c(
+    "A" = "darkgreen",
+    "B" = "purple")) +
+  scale_linetype_manual(values = c(
+    "50" = "dashed",
+    "100" = "solid")) +
+  xlim(0, 50000) +
+  ylim(0, 50000) +
+  theme_bw() +
+  labs(color = "Scenario", linetype = "Return Period (years)") +
+  xlab("Marshalltown Flow (cfs)") +
+  ylab("Marengo Flow (cfs)") +
+  ggtitle("") +
+  coord_fixed(ratio = 1)
+
+# View 1/100 joint probability contour from scenario A
+df_cl[df_cl$scenario == "A" & df_cl$rp == "100", ]
+```
+
+# Combine Isolines
+
+```{r}
+combine_isolines_envelope <- function(
+  iso_a, iso_b,
+  x_col = "marshalltown",
+  y_col = "marengo",
+  step = NULL,          # e.g. 1, 0.1; if NULL uses unique rounded x/y
+  digits = 2
+){
+  stopifnot(all(c(x_col, y_col) %in% names(iso_a)),
+            all(c(x_col, y_col) %in% names(iso_b)))
+
+  a <- iso_a[, c(x_col, y_col)]
+  b <- iso_b[, c(x_col, y_col)]
+  colnames(a) <- c("x","y")
+  colnames(b) <- c("x","y")
+
+  # build x grid
+  if (is.null(step)) {
+    x_grid <- sort(unique(round(c(a$x, b$x), digits)))
+  } else {
+    x_grid <- round(seq(min(c(a$x,b$x), na.rm=TRUE),
+                        max(c(a$x,b$x), na.rm=TRUE),
+                        by=step), digits)
+  }
+
+  # helper: max y at each x via interpolation
+  max_y_at_x <- function(df, xg){
+    df <- df[order(df$x),]
+    yhat <- approx(df$x, df$y, xout=xg, rule=2)$y
+    yhat
+  }
+
+  y_a <- max_y_at_x(a, x_grid)
+  y_b <- max_y_at_x(b, x_grid)
+  y_env <- pmax(y_a, y_b)
+  part1 <- data.frame(x = x_grid, y = y_env)
+
+  # build y grid
+  if (is.null(step)) {
+    y_grid <- sort(unique(round(c(a$y, b$y), digits)))
+  } else {
+    y_grid <- round(seq(min(c(a$y,b$y), na.rm=TRUE),
+                        max(c(a$y,b$y), na.rm=TRUE),
+                        by=step), digits)
+  }
+
+  # helper: max x at each y via interpolation
+  max_x_at_y <- function(df, yg){
+    df <- df[order(df$y),]
+    xhat <- approx(df$y, df$x, xout=yg, rule=2)$y
+    xhat
+  }
+
+  x_a <- max_x_at_y(a, y_grid)
+  x_b <- max_x_at_y(b, y_grid)
+  x_env <- pmax(x_a, x_b)
+  part2 <- data.frame(x = x_env, y = y_grid)
+
+  # combine, round, deduplicate (prefer unique x)
+  out <- rbind(part1, part2)
+  out$x <- round(out$x, digits)
+  out$y <- round(out$y, digits)
+
+  out <- out[order(out$x), ]
+  out <- out[!duplicated(out$x), ]  # mimic your original "unique x" behavior
+  out
+}
+
+iso_combined <- combine_isolines_envelope(df_cl_A, df_cl_B,
+                                         x_col="marshalltown", y_col="marengo",
+                                         step=1, digits=2)
+
+ggplot(iso_combined, aes(x = x, y = y)) +
+  geom_path(linewidth = 1.1, colour = "steelblue") +
+  xlim(0, 50000) +
+  ylim(0, 50000) +
+  theme_bw() +
+  xlab("Marshalltown Flow (cfs)") +
+  ylab("Marengo Flow (cfs)") +
+  ggtitle("") +
+  coord_equal()
+  
+```
+
+```{r}
+kde_along_isoline <- function(Iso, cop_sample, Data, Isoline_Probs, Sim_Max){
+  # truncate extreme simulated values (your original)
+  remove <- which(cop_sample[,1] > Sim_Max*max(Data[,1], na.rm=TRUE) |
+                  cop_sample[,2] > Sim_Max*max(Data[,2], na.rm=TRUE))
+  if (Isoline_Probs == "Sample" && length(remove) > 1){
+    cop_sample <- cop_sample[-remove, , drop=FALSE]
+  }
+
+  if (Isoline_Probs == "Sample"){
+    pred <- ks::kde(x=cop_sample, eval.points=Iso)$estimate
+  } else {
+    pred <- ks::kde(x=stats::na.omit(Data), eval.points=Iso)$estimate
+  }
+
+  contour <- (pred - min(pred)) / (max(pred) - min(pred))
+  list(prediction=pred, contour=contour)
+}
+
+extract_design_events_2d <- function(Iso, prediction, N_Ensemble){
+  idx <- which(prediction == max(prediction, na.rm=TRUE))[1]
+  most <- data.frame(Iso[idx,1], Iso[idx,2])
+
+  # your current "full dependence" is max-x and max-y on the isoline (not true FD, but keep behavior)
+  full <- data.frame(max(Iso[,1]), max(Iso[,2]))
+
+  ens <- NULL
+  if (N_Ensemble > 0){
+    ok <- which(prediction > 0)
+    ens <- Iso[sample(ok, size=N_Ensemble, replace=TRUE, prob=prediction[ok]), , drop=FALSE]
+  }
+
+  list(MostLikelyEvent=most, FullDependence=full, Ensemble=ens)
+}
+```
