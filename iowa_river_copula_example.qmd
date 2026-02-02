@@ -16,6 +16,7 @@ library(lmomco)
 library(VineCopula)
 library(MultiHazard)
 library(purrr)
+library(geomtextpath)
 
 # User directory 
 dir <- "C:/Projects/Neptune/CopulaAnalysis/R"
@@ -45,7 +46,7 @@ Here is a summary of the steps:
 
 # Functions
 
-Define custom functions.
+Define custom functions. There are additional functions in later code blocks. I'm sorry for my R sins.
 
 ```{r}
 # Computes a time separation criterion, in days, between events in a PDS to ensure independence
@@ -1050,7 +1051,6 @@ Plot the envelope isolines colored by relative density (KDE-scaled), with return
     -   the “most likely event” marker on the isoline.
 
 ```{r}
-library(geomtextpath)
 
 marshalltown_con_data <- marshalltown_con %>%
   mutate(Scenario = "Marshalltown_Conditioning")
@@ -1116,5 +1116,3 @@ geom_point(
     name = ""
   )
 ```
-
-\
