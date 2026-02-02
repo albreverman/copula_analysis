@@ -19,8 +19,11 @@ library(purrr)
 
 # User directory 
 dir <- "C:/Projects/Neptune/CopulaAnalysis/R"
-setwd(dir)
 ```
+
+This code builds two conditional extreme-flow dependence models (Scenario A/B), selects copulas by AIC, generates joint extreme simulations, derives joint return-period contours, merges them into a conservative envelope, and then ranks where along that envelope joint outcomes are most probable using KDE—yielding both curves and a representative “most likely” design point.
+
+Here is a summary of the steps:
 
 -   Download daily streamflow from two gages on the mainstem of the Iowa River
 
@@ -501,10 +504,10 @@ marengo_cop <- joe_cop
 
 ## Generate Samples
 
-Generate a large number of samples (N = 10\^7). Split the number of samples across the two conditional copula models in proportion to the number of events in each dataset.
+Generate a large number of samples). Split the number of samples across the two conditional copula models in proportion to the number of events in each dataset.
 
 ```{r}
-N <- 10^7
+N <- 10^6
 n_A <- nrow(marshalltown_con) # Number of coincident events in scenario A
 n_B <- nrow(marengo_con) # Number of coincident events in scenario B
 n1 <- round((N * n_A) / (n_A + n_B), 0)
@@ -744,9 +747,10 @@ contourLines[contourLines$scenario == "A" & contourLines$rp == "100", ]
 
 ## Combine Isolines into Envelope Curve
 
+The make_envelope function takes a data frame containing isoline points for one return period, rp, but multiple curves, distinguished by scenario, and produces a new curve that is the upper envelope (for each x-value, it keeps the maximum y-value across all scenarios).
+
 ```{r}
 
-# This function takes a data frame containing isoline points for one return period, rp, but multiple curves, distinguished by scenario, and produces a new curve that is the upper envelope (for each x-value, it keeps the maximum y-value across all scenarios)
 make_envelope <- function(df_rp, n_grid = 500L) {
   
   # Clean and sort input 
@@ -789,6 +793,11 @@ make_envelope <- function(df_rp, n_grid = 500L) {
     marengo = yenv) %>%
     dplyr::filter(marshalltown >= 0, marengo >= 0)
 }
+```
+
+Apply make_envelope function to combine isolines in contourLines into an envelope curve.
+
+```{r}
 
 envelope_curves <- contourLines %>%
   group_by(rp) %>%
@@ -798,7 +807,7 @@ envelope_curves <- contourLines %>%
 envelope_curves
 ```
 
-## Plot Envelope Curve
+## Plot Individual Contour Lines and Envelope Curve
 
 ```{r}
 
@@ -835,77 +844,84 @@ contourLinesPlot
 
 # Compute Relative Density Along Isolines
 
+## KDE Along Isoline
+
+Compute the KDE values along an isoline in *flow space* using your objects:
+
+-   Iso: data.frame/tibble with columns marshalltown, marengo (one RP + one scenario, or already merged)
+
+-   cop_sample: your simulated samples data.frame with columns Marshalltown, Marengo (flow space)
+
+-   Data: optional observed data in flow space with same two columns; used when Source="Data"
+
+-   Source: "Sample" (default; uses copula simulations) or "Data" (uses observed pairs)
+
+-   Sim_Max: truncation multiplier (same intent as your original function)
+
+    -   With very large simulations, heavy-tailed marginals can generate rare but enormous values. Sim_Max applies a guardrail by keeping the KDE focused on the range relevant to your contour/isoline or observed data.
+
 ```{r}
 
-plot(head(copula_sample, 1000))
-```
-
-```{r}
-
-# KDE values along an isoline in *flow space* using your objects:
-# - Iso: data.frame/tibble with columns marshalltown, marengo (one RP + one scenario, or already merged)
-# - cop_sample: your simulated samples data.frame with columns Marshalltown, Marengo (flow space)
-# - Data: optional observed data in flow space with same two columns; used when Source="Data"
-# - Source: "Sample" (default; uses copula simulations) or "Data" (uses observed pairs)
-# - Sim_Max: truncation multiplier (same intent as your original function)
 kde_along_isoline <- function(Iso,
                               cop_sample,
                               Data = NULL,
                               Source = c("Sample", "Data"),
-                              Sim_Max = 10) {
+                              Sim_Max = 10,
+                              gridsize = c(200, 200)) {
+
   Source <- match.arg(Source)
 
-  # --- standardize isoline matrix (eval points) ---
-  Iso_mat <- Iso %>%
-    dplyr::select(marshalltown, marengo) %>%
-    as.data.frame()
+  # Keep exactly these rows and order
+  Iso2 <- Iso %>% dplyr::select(marshalltown, marengo)
 
-  # --- choose KDE input points ---
+  # eval.points must be an n×2 numeric matrix for ks::kde
+  Iso_mat <- as.matrix(Iso2)
+  storage.mode(Iso_mat) <- "double"
+
   if (Source == "Sample") {
-    xdat <- cop_sample %>%
-      dplyr::select(Marshalltown, Marengo) %>%
-      as.data.frame()
+    xdat <- cop_sample %>% dplyr::select(Marshalltown, Marengo) %>% as.matrix()
+    storage.mode(xdat) <- "double"
 
-    # truncate extreme simulated values relative to isoline scale (or data scale if provided)
-    ref <- if (!is.null(Data)) {
-      Data %>% dplyr::select(Marshalltown, Marengo) %>% as.data.frame()
-    } else {
-      Iso_mat
-    }
+    ref <- if (!is.null(Data)) Data %>% dplyr::select(Marshalltown, Marengo) else Iso2
 
     remove <- which(
-      xdat[, 1] > Sim_Max * max(ref[, 1], na.rm = TRUE) |
-        xdat[, 2] > Sim_Max * max(ref[, 2], na.rm = TRUE)
+      xdat[,1] > Sim_Max * max(ref[[1]], na.rm=TRUE) |
+      xdat[,2] > Sim_Max * max(ref[[2]], na.rm=TRUE)
     )
     if (length(remove) > 0) xdat <- xdat[-remove, , drop = FALSE]
-
-  } else { # Source == "Data"
-    if (is.null(Data)) stop("When Source='Data', you must supply `Data` (Marshalltown, Marengo).")
-    xdat <- Data %>%
-      dplyr::select(Marshalltown, Marengo) %>%
-      stats::na.omit() %>%
-      as.data.frame()
-  }
-
-  # ks::kde expects matrices/data.frames with 2 columns
-  pred <- ks::kde(x = xdat, eval.points = Iso_mat, binned = TRUE)$estimate
-
-  # normalize to [0,1] for plotting/contours
-  rng <- range(pred, na.rm = TRUE)
-  contour <- if (is.finite(rng[1]) && is.finite(rng[2]) && rng[2] > rng[1]) {
-    (pred - rng[1]) / (rng[2] - rng[1])
   } else {
-    rep(NA_real_, length(pred))
+    if (is.null(Data)) stop("When Source='Data', supply `Data`.")
+    xdat <- Data %>% dplyr::select(Marshalltown, Marengo) %>% na.omit() %>% as.matrix()
+    storage.mode(xdat) <- "double"
   }
 
-  list(prediction = pred, contour = contour)
+  est <- ks::kde(x = xdat, eval.points = Iso_mat, gridsize = gridsize)$estimate
+
+  if (length(est) != nrow(Iso_mat)) {
+    stop("KDE length mismatch: got ", length(est), " but Iso has ", nrow(Iso_mat), " rows.")
+  }
+
+  rng <- range(est, na.rm = TRUE)
+  scaled <- if (is.finite(rng[1]) && is.finite(rng[2]) && rng[2] > rng[1]) {
+    (est - rng[1]) / (rng[2] - rng[1])
+  } else rep(NA_real_, length(est))
+
+  list(prediction = est, contour = scaled)
 }
+```
 
+## Find Design Event Along Each Isoline
 
-# Pick "design events" on an isoline in your coordinate system:
-# - Iso: data.frame with marshalltown, marengo columns
-# - prediction: KDE values returned by kde_along_isoline()$prediction
-# - N_Ensemble: number of sampled ensemble points along isoline (weighted by prediction)
+Fine "design events" or "most likely events" on an isoline. The "most likely event" is the isoline point with the maximum KDE.
+
+-   Iso: data.frame with marshalltown, marengo columns
+
+-   prediction: KDE values returned by kde_along_isoline()\$prediction
+
+-   N_Ensemble: number of sampled ensemble points along isoline (weighted by prediction)
+
+```{r}
+
 extract_design_events_2d <- function(Iso, prediction, N_Ensemble = 0) {
 
   Iso_mat <- Iso %>%
@@ -925,63 +941,137 @@ extract_design_events_2d <- function(Iso, prediction, N_Ensemble = 0) {
     marengo      = max(Iso_mat[, 2], na.rm = TRUE)
   )
 
-  ens <- NULL
+  ens <- NULL # Initialize ensemble output as NULL
   if (N_Ensemble > 0) {
+    # Find indices of isoline points where the KDE values are finite and strictly positive
     ok <- which(is.finite(prediction) & prediction > 0)
+    # If there are no valid KDE weights, return an empty 0-row matrix/data frame with the same number of columns as Iso_met
     if (length(ok) == 0) {
       ens <- Iso_mat[0, , drop = FALSE]
+    # Randomly select N_Ensemble indices from the valid set ok
     } else {
+      # prob = prediction[ok] makes it weighted sampling: higher KDE density -> more likely to be chosen
       draw <- sample(ok, size = N_Ensemble, replace = TRUE, prob = prediction[ok])
+      # Extracts the sampled isoline coordinates corresponding to the chosen indices
       ens <- Iso_mat[draw, , drop = FALSE]
+      # Label the two columns
       names(ens) <- c("marshalltown", "marengo")
     }
   }
 
   list(MostLikelyEvent = most, FullDependence = full, Ensemble = ens)
 }
-
-Iso100 <- envelope_curves %>% dplyr::filter(rp == 100)   # or filter(scenario=="A", rp==100)
-
-kde_out <- kde_along_isoline(
-  Iso = Iso100,
-  cop_sample = copula_sample,     # columns: Marshalltown, Marengo
-  Source = "Sample",
-  Sim_Max = 10
-)
-
-design <- extract_design_events_2d(Iso100, kde_out$prediction, N_Ensemble = 200)
-designEvent <- design$MostLikelyEvent
-
-contourLines_kde <- envelope_curves %>%
-  group_by(rp) %>%
-  group_split() %>%
-  map_dfr(function(df_iso){
-
-    kde_out <- kde_along_isoline(
-      Iso        = df_iso,
-      cop_sample = copula_sample,   # columns: Marshalltown, Marengo
-      Source     = "Sample",
-      Sim_Max    = 10
-    )
-
-    df_iso %>%
-      mutate(
-        kde = kde_out$prediction,
-        kde_scaled = kde_out$contour
-      )
-  })
-
 ```
 
+## KDE and Design Event for 1/100 AEP Contour
+
 ```{r}
+Iso100 <- envelope_curves %>% dplyr::filter(rp == 100)   # or filter(scenario=="A", rp==100)
 
-data <- rbind(marshalltown_con, marengo_con) %>%
-  select(Marshalltown, Marengo)
+kde_out100 <- kde_along_isoline(
+  Iso = Iso100,
+  cop_sample = copula_sample,     # columns: Marshalltown, Marengo
+  gridsize = c(400, 400)
+)
 
-kde_contour_plot <- ggplot(contourLines_kde, aes(marshalltown, marengo)) +
+design100 <- extract_design_events_2d(Iso100, kde_out100$prediction, N_Ensemble = 200)
+designEvent100 <- design100$MostLikelyEvent
+
+contourLines_kde_100 <- envelope_curves %>%
+  dplyr::group_by(rp) %>%
+  dplyr::group_split() %>%
+  purrr::map_dfr(function(df_iso) {
+
+    kde_out_i <- kde_along_isoline(
+      Iso        = df_iso,
+      cop_sample = copula_sample,
+      Source     = "Sample",
+      Sim_Max    = 10,
+      gridsize   = c(400, 400)
+    )
+
+    stopifnot(length(kde_out_i$prediction) == nrow(df_iso))
+
+    df_iso %>%
+      dplyr::mutate(
+        kde        = kde_out_i$prediction,
+        kde_scaled = kde_out_i$contour
+      )
+  })
+```
+
+## KDE and Design Event for 1/50 AEP Contour
+
+```{r}
+Iso50 <- envelope_curves %>% dplyr::filter(rp == 50)   
+
+kde_out50 <- kde_along_isoline(
+  Iso = Iso50,
+  cop_sample = copula_sample,     # columns: Marshalltown, Marengo
+  gridsize = c(400, 400)
+)
+
+design50 <- extract_design_events_2d(Iso50, kde_out50$prediction, N_Ensemble = 200)
+designEvent50 <- design50$MostLikelyEvent
+
+contourLines_kde_50 <- envelope_curves %>%
+  dplyr::group_by(rp) %>%
+  dplyr::group_split() %>%
+  purrr::map_dfr(function(df_iso) {
+
+    kde_out_i <- kde_along_isoline(
+      Iso        = df_iso,
+      cop_sample = copula_sample,
+      Source     = "Sample",
+      Sim_Max    = 10,
+      gridsize   = c(400, 400)
+    )
+
+    stopifnot(length(kde_out_i$prediction) == nrow(df_iso))
+
+    df_iso %>%
+      dplyr::mutate(
+        kde        = kde_out_i$prediction,
+        kde_scaled = kde_out_i$contour
+      )
+  })
+```
+
+# Final Plot
+
+Plot the envelope isolines colored by relative density (KDE-scaled), with return period labels along the curve.
+
+-   Overlays:
+
+    -   a subset of simulated pairs (grey),
+
+    -   observed coincident-event pairs from both scenarios (different shapes/colors),
+
+    -   the “most likely event” marker on the isoline.
+
+```{r}
+library(geomtextpath)
+
+marshalltown_con_data <- marshalltown_con %>%
+  mutate(Scenario = "Marshalltown_Conditioning")
+
+marengo_con_data <- marengo_con %>%
+  mutate(Scenario = "Marengo_Conditioning")
+
+data <- rbind(marshalltown_con_data, marengo_con_data) %>%
+  select(Marshalltown, Marengo, Scenario)
+
+kde_contour_plot <- ggplot(contourLines_kde_100, aes(marshalltown, marengo)) +
+    geomtextpath::geom_textpath(
+    aes(label = rp, group = rp, color = kde_scaled),
+    color = "black", # label color
+    size = 5,
+    text_smoothing = 10,     # helps spacing along the curve
+    vjust = -0.2
+  ) +
   geom_path(aes(group = rp, color = kde_scaled), size = 1.2) +
   scale_color_distiller(palette = "RdYlBu", direction = 1,
-                        name = "KDE (scaled)", limits = c(0, 1)) +
+                        name = "Relative Probability Density", limits = c(0, 1)) +
   theme_bw() + coord_fixed(1) +
   xlim(0, 50000) + ylim(0, 50000) +
   labs(x = "Marshalltown Flow (cfs)", y = "Marengo Flow (cfs)")
@@ -989,18 +1079,42 @@ kde_contour_plot <- ggplot(contourLines_kde, aes(marshalltown, marengo)) +
 kde_contour_plot
 
 kde_contour_plot +
-  geom_point(data = head(copula_sample, n = 10000),
-             aes(Marshalltown, Marengo),
-             inherit.aes = FALSE,
-             color = "darkgrey", shape = 21) +
-  geom_point(data = data,
-             aes(Marshalltown, Marengo),
-             color = "black", shape = 21) + 
-  geom_point(data = design$MostLikelyEvent,
-             aes(marshalltown, marengo),
-             inherit.aes = FALSE,
-             color = "black", fill = "blue",
-             shape = 23, size = 2, stroke = 1.1)
+  geom_point(
+    data = head(copula_sample, n = 10000),
+    aes(x = Marshalltown, y = Marengo),
+    inherit.aes = FALSE,
+    color = "darkgrey", shape = 21
+  ) +
+  geom_point(
+    data = data,
+    aes(x = Marshalltown, y = Marengo, shape = Scenario),
+    inherit.aes = FALSE,
+    color = c(Marshalltown_Conditioning = "darkgreen", Marengo_Conditioning = "purple")[data$Scenario],
+    size = 2, stroke = 1
+  ) +
+  scale_shape_manual(values = c(Marshalltown_Conditioning = 1, Marengo_Conditioning = 4), name = "Scenario") +
+geom_point(
+    data = design100$MostLikelyEvent,
+    aes(x = marshalltown, y = marengo, fill = "Most Likely Event"),
+    inherit.aes = FALSE,
+    color = "black",
+    shape = 23,
+    size = 2,
+    stroke = 1.1
+  ) +
+  geom_point(
+    data = design50$MostLikelyEvent,
+    aes(x = marshalltown, y = marengo, fill = "Most Likely Event"),
+    inherit.aes = FALSE,
+    color = "black",
+    shape = 23,
+    size = 2,
+    stroke = 1.1
+  ) +
+  scale_fill_manual(
+    values = c("Most Likely Event" = "blue"),
+    name = ""
+  )
 ```
 
 \
