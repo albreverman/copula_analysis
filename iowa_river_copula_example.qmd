@@ -15,6 +15,7 @@ library(lmom)
 library(lmomco)
 library(VineCopula)
 library(MultiHazard)
+library(purrr)
 
 # User directory 
 dir <- "C:/Projects/Neptune/CopulaAnalysis/R"
@@ -44,13 +45,19 @@ setwd(dir)
 Define custom functions.
 
 ```{r}
-# Computes a time separation criterion, in days, between events in a PDS to ensure independence. Equation presented in Bulletin 17.
-# DA in sq mi
+# Computes a time separation criterion, in days, between events in a PDS to ensure independence
+#Reference: Bulletin 17
+# DA: drainage area in square miles
+# returns days between events
 B17_days_between <- function(DA) {
   ceiling(5 + log(DA))
 }
 
-# Madsen annualization of Generalized Pareto distribution to Generalized Extreme Value distribution # Reference: Madsen, H., Rasmussen, P., & Rosbjerg, D. (1997). Comparison of annual maximum series and partial duration series methods for modeling extreme hydrologic events 1. At-site modeling. Water Resources Research, # 33(4), 747-757.
+# Madsen annualization of Generalized Pareto distribution to Generalized Extreme Value distribution 
+# gpd_par: Generalized Pareto distribution parameters
+# lambda: rate of events
+# returns Generalized Extreme Value (GEV) distribution parameters
+# Reference: Madsen, H., Rasmussen, P., & Rosbjerg, D. (1997). Comparison of annual maximum series and partial duration series methods for modeling extreme hydrologic events 1. At-site modeling. Water Resources Research, # 33(4), 747-757.
 madsen_annualization <- function(gpd_par, lambda) {
   gev_xi <- gpd_par["xi"] + (gpd_par["alpha"] / gpd_par["k"]) * (1 - lambda ^ -gpd_par["k"]) # scale
   gev_alpha <- gpd_par["alpha"] * lambda ^ -gpd_par["k"] # scale
@@ -63,6 +70,15 @@ madsen_annualization <- function(gpd_par, lambda) {
   c(xi = as.numeric(gev_xi),
   alpha = as.numeric(gev_alpha),
   k = as.numeric(gev_k))
+}
+
+# Langbein adjustment defines the relationship between empirical flood expectancies in the partial duration series and the probability of the correspoding flood as an annual series
+# p_pds: partial duration non-exceedance probability
+# lambda: rate of events
+# returns the annual non-exceedance probability
+# Reference: Langbein, W. B. (1949). Annual Floods and the Partial-duration Flood Series. American Geophysical Union, 30(6), 879-881.
+langbein_adjustment <- function(lambda, p_pds) {
+  exp(-lambda * (1 - p_pds))
 }
 ```
 
@@ -335,11 +351,11 @@ pivot_longer(cols = -Date, names_to = "series", values_to = "Gage")
 
 ggplot(marshalltown_con_longer, aes(x = Date, y = Gage, color = series)) +
   geom_point(size = 2) +
-    geom_hline(yintercept = thresh_marshalltown, color = "red", linetype = "solid") +
+    geom_hline(yintercept = thresh_marshalltown, color = "#A60F2D", linetype = "solid") +
     labs(color = "Gage") + 
   scale_color_manual(                            
     values = c(
-      Marshalltown = "red",
+      Marshalltown = "#A60F2D",
       Marengo = "black")) +
   ylab("Flow (cfs)") +
   ggtitle("Scenario A: Extremal Marshalltown Flows") +
@@ -350,11 +366,11 @@ marengo_con_longer <- marengo_con |>
 
 ggplot(marengo_con_longer, aes(x = Date, y = Gage, color = series)) +
   geom_point(size = 2) +
-    geom_hline(yintercept = thresh_marengo, color = "red", linetype = "solid") +
+    geom_hline(yintercept = thresh_marengo, color = "#A60F2D", linetype = "solid") +
     labs(color = "Gage") +
   scale_color_manual(                            
     values = c(
-      Marengo = "red",
+      Marengo = "#A60F2D",
       Marshalltown = "black")) +
   ylab("Flow (cfs)") +
   ggtitle("Scenario B: Extremal Marengo Flows") +
@@ -498,7 +514,7 @@ n2 <- N - n1
 s1 <- VineCopula::BiCopSim(n1, obj = marshalltown_cop)
 s2 <- VineCopula::BiCopSim(n2, obj = marengo_cop)
 
-# plot(head(s1, 1000))
+#plot(head(s1, 1000))
 ```
 
 ## Transform to Original Scale using Quantile Functions
@@ -510,8 +526,8 @@ Transform the simulated uniforms to original units using quantile functions.
 marshalltown_gev <- lmomco::vec2par(marshalltown_gev, type = "gev")
 marengo_glo <- lmomco::vec2par(marengo_glo, type = "glo")
 
-marshalltown_A <- quagev(s1[1,], marshalltown_gev)
-marengo_A <- quaglo(s1[2,], marengo_glo)
+marshalltown_A <- quagev(s1[,1], marshalltown_gev)
+marengo_A <- quaglo(s1[,2], marengo_glo)
 
 copula_sample_A <- data.frame(Marshalltown = marshalltown_A, Marengo = marengo_A)
 
@@ -519,13 +535,13 @@ copula_sample_A <- data.frame(Marshalltown = marshalltown_A, Marengo = marengo_A
 marengo_gev <- vec2par(marengo_gev, type = "gev")
 marshalltown_glo <- vec2par(marshalltown_glo, type = "glo")
 
-marengo_B <- quagev(s2[1,], marengo_gev)
-marshalltown_B <- quaglo(s2[2,], marshalltown_glo)
+marengo_B <- quagev(s2[,1], marengo_gev)
+marshalltown_B <- quaglo(s2[,2], marshalltown_glo)
 
 copula_sample_B <- data.frame(Marshalltown = marshalltown_B, Marengo = marengo_B)
 
 # Combine samples from both scenarios; used in KDE 
-copula_sample <- rbind(copula_sample_A, copula_sample_A)
+copula_sample <- rbind(copula_sample_A, copula_sample_B)
 ```
 
 # Isoline Derivation
@@ -641,18 +657,6 @@ contourLines_B_100 <- do.call(rbind, lapply(seq_along(xy100), function(i){
 
 ## Transform Variates to Original Scale
 
-### Langbein Adjustment
-
-```{r}
-# Langbein adjustment defines the relationship between empirical flood expectancies in the partial duration series and the probability of the correspoding flood as an annual series
-# p_pds is the partial duration non-exceedance probability, lambda is the rate of floods
-# returns the annual non-exceedance probability
-# Langbein, W. B. (1949). Annual Floods and the Partial-duration Flood Series. American Geophysical Union, 30(6), 879-881.
-langbein_adjustment <- function(lambda, p_pds) {
-  exp(-lambda * (1 - p_pds))
-}
-```
-
 ### Scenario A Transform Variates
 
 ```{r}
@@ -672,7 +676,7 @@ contourLines_A <- contourLines_A %>%
 
 ```{r}
 
-contourLines_B <- rbind(contourLines_B_50, contourLines_A_100)
+contourLines_B <- rbind(contourLines_B_50, contourLines_B_100)
 p_pds <- contourLines_B$marengo_cdf
 p_marengo_B <- langbein_adjustment(rate_marengo, p_pds) # Annualized probabilities for Marengo
 
@@ -736,131 +740,267 @@ ggplot(contourLines, aes(marshalltown, marengo, color = scenario, linetype = fac
 contourLines[contourLines$scenario == "A" & contourLines$rp == "100", ]
 ```
 
-# Combine Isolines
+# Compute Envelope Curve
+
+## Combine Isolines into Envelope Curve
 
 ```{r}
 
-# Helper 1: combine two isolines into one envelope + resample to fixed resolution
-combine_isolines <- function(P1, P2,
-                             dec = 2,
-                             interval = 10000,
-                             end = FALSE,
-                             type = c("Combined", "Con1", "Con2"),
-                             thres1 = NA, thres2 = NA) {
-  type <- match.arg(type)
+# This function takes a data frame containing isoline points for one return period, rp, but multiple curves, distinguished by scenario, and produces a new curve that is the upper envelope (for each x-value, it keeps the maximum y-value across all scenarios)
+make_envelope <- function(df_rp, n_grid = 500L) {
+  
+  # Clean and sort input 
+  # Drop rows where marshalltown (x) or marengo (y) are missing/non-finite
+  # Sorts by marshalltown values
+  df_rp <- df_rp %>%
+    filter(is.finite(marshalltown), is.finite(marengo)) %>%
+    arrange(marshalltown)
 
-  colnames(P1) <- c("x", "y")
-  colnames(P2) <- c("x", "y")
+  # Create a common x-grid over the range covered by the isolines
+  # Builds xg, a sequence from the minimum to maximum marshalltown in the data,        with n_grid points
+  xg <- seq(min(df_rp$marshalltown), max(df_rp$marshalltown), length.out = n_grid)
 
-  step <- 10^-dec
+  # Interpolate each scenario separately (safer than interpolating across mixed        curves)
+  # Splits data by scenario
+  # For each scenario:
+    # Sorts by marshalltown
+    # Removes duplicate x-values so interpolation behaves well
+    # Use approx() to linearly interpolate marengo values at every xg
+    # rule = 1 means no extrapolation (any xout < min(x) or xout > max(x) returns      NA)
+  y_by_curve <- df_rp %>%
+    group_by(scenario) %>%
+    group_split() %>%
+    map(function(d) {
+      d <- d %>% arrange(marshalltown)
+      # approx requires unique x to behave well
+      d <- d %>% distinct(marshalltown, .keep_all = TRUE)
 
-  # helper: at each grid value, take the max value from either curve
-  envelope_on_grid <- function(grid, P1_key, P1_val, P2_key, P2_val) {
-    P1k <- round(P1_key, dec)
-    P2k <- round(P2_key, dec)
+      approx(x = d$marshalltown, y = d$marengo, xout = xg,
+             rule = 1, ties = "ordered")$y
+    })
 
-    out <- vapply(grid, function(g) {
-      v <- c(P1_val[P1k == g], P2_val[P2k == g])
-      m <- suppressWarnings(max(v, na.rm = TRUE))
-      if (is.infinite(m)) NA_real_ else m
-    }, numeric(1))
+  # Compute the envelope = pointwise maximum across curves
+  yenv <- do.call(pmax, c(y_by_curve, list(na.rm = TRUE)))
 
-    out
-  }
-
-  # 1) Build envelope points from an x-grid and a y-grid
-  x_grid <- round(seq(min(c(P1$x, P2$x), na.rm = TRUE),
-                      max(c(P1$x, P2$x), na.rm = TRUE),
-                      by = step), dec)
-  y_grid <- round(seq(min(c(P1$y, P2$y), na.rm = TRUE),
-                      max(c(P1$y, P2$y), na.rm = TRUE),
-                      by = step), dec)
-
-  y_on_x <- envelope_on_grid(x_grid, P1$x, P1$y, P2$x, P2$y)     # y(x) = max
-  x_on_y <- envelope_on_grid(y_grid, P1$y, P1$x, P2$y, P2$x)     # x(y) = max
-
-  pts <- rbind(
-    data.frame(x = x_grid, y = y_on_x),
-    data.frame(x = x_on_y, y = y_grid)
-  )
-  pts <- pts[complete.cases(pts), ]
-  pts$x <- round(pts$x, dec)
-  pts$y <- round(pts$y, dec)
-
-  # 2) Optionally force endpoints (only for Combined in original code)
-  if (isTRUE(end) && type == "Combined") {
-    pts <- rbind(P2[1, ], pts, P1[nrow(P1), ])
-    pts$x <- round(pts$x, dec)
-    pts$y <- round(pts$y, dec)
-  }
-
-  # 3) Sort & de-duplicate by x (same spirit as original)
-  pts <- pts[order(pts$x), ]
-  pts <- pts[!duplicated(pts$x), ]
-
-  # 4) Resample to `interval` points along arc length
-  x01 <- (pts$x - min(pts$x)) / (max(pts$x) - min(pts$x))
-  y01 <- (pts$y - min(pts$y)) / (max(pts$y) - min(pts$y))
-
-  s <- cumsum(c(0, sqrt(diff(x01)^2 + diff(y01)^2)))
-  if (max(s) == 0) {
-    Iso <- pts[rep(1, interval), ]
-  } else {
-    s_out <- seq(0, max(s), length.out = interval)
-    x_out <- approx(s, pts$x, xout = s_out)$y
-    y_out <- approx(s, pts$y, xout = s_out)$y
-    Iso <- data.frame(x = x_out, y = y_out)
-  }
-
-  # 5) Threshold filter for Con1/Con2 types
-  if (type == "Con1" && !is.na(thres1)) Iso <- Iso[Iso$x >= thres1, ]
-  if (type == "Con2" && !is.na(thres2)) Iso <- Iso[Iso$y >= thres2, ]
-
-  Iso
+  # Return a table
+  tibble(
+    rp = unique(df_rp$rp),
+    marshalltown = xg,
+    marengo = yenv) %>%
+    dplyr::filter(marshalltown >= 0, marengo >= 0)
 }
 
-clA <- contourLines_A %>%
-  select(marshalltown, marengo)
+envelope_curves <- contourLines %>%
+  group_by(rp) %>%
+  group_split() %>%
+  map_dfr(make_envelope)
 
-clB <- contourLines_B %>%
-  select(marshalltown, marengo)
+envelope_curves
+```
 
-iso <- combine_isolines(clA, clB, 
-                        type = "Combined")
+## Plot Envelope Curve
+
+```{r}
+
+contourLinesPlot <- ggplot() +
+  geom_path(
+    data = contourLines,
+    aes(marshalltown, marengo, color = scenario, linetype = factor(rp)),
+    linewidth = 0.8, alpha = 0.7
+  ) +
+  geom_path(
+    data = envelope_curves,
+    aes(marshalltown, marengo, linetype = factor(rp)),
+    color = "black", linewidth = 1.2
+  ) +
+  scale_color_manual(values = c(
+    "A" = "darkgreen",
+    "B" = "purple"
+  )) +
+  scale_linetype_manual(values = c(
+    "50"  = "dashed",
+    "100" = "solid"
+  )) +
+  theme_bw() +
+  coord_fixed(ratio = 1) +
+  labs(
+    color = "Scenario",
+    linetype = "Return Period (years)",
+    x = "Marshalltown Flow (cfs)",
+    y = "Marengo Flow (cfs)"
+  )
+
+contourLinesPlot
+```
+
+# Compute Relative Density Along Isolines
+
+```{r}
+
+plot(head(copula_sample, 1000))
 ```
 
 ```{r}
-kde_along_isoline <- function(Iso, cop_sample, Data, Isoline_Probs, Sim_Max){
-  # truncate extreme simulated values (your original)
-  remove <- which(cop_sample[,1] > Sim_Max*max(Data[,1], na.rm=TRUE) |
-                  cop_sample[,2] > Sim_Max*max(Data[,2], na.rm=TRUE))
-  if (Isoline_Probs == "Sample" && length(remove) > 1){
-    cop_sample <- cop_sample[-remove, , drop=FALSE]
+
+# KDE values along an isoline in *flow space* using your objects:
+# - Iso: data.frame/tibble with columns marshalltown, marengo (one RP + one scenario, or already merged)
+# - cop_sample: your simulated samples data.frame with columns Marshalltown, Marengo (flow space)
+# - Data: optional observed data in flow space with same two columns; used when Source="Data"
+# - Source: "Sample" (default; uses copula simulations) or "Data" (uses observed pairs)
+# - Sim_Max: truncation multiplier (same intent as your original function)
+kde_along_isoline <- function(Iso,
+                              cop_sample,
+                              Data = NULL,
+                              Source = c("Sample", "Data"),
+                              Sim_Max = 10) {
+  Source <- match.arg(Source)
+
+  # --- standardize isoline matrix (eval points) ---
+  Iso_mat <- Iso %>%
+    dplyr::select(marshalltown, marengo) %>%
+    as.data.frame()
+
+  # --- choose KDE input points ---
+  if (Source == "Sample") {
+    xdat <- cop_sample %>%
+      dplyr::select(Marshalltown, Marengo) %>%
+      as.data.frame()
+
+    # truncate extreme simulated values relative to isoline scale (or data scale if provided)
+    ref <- if (!is.null(Data)) {
+      Data %>% dplyr::select(Marshalltown, Marengo) %>% as.data.frame()
+    } else {
+      Iso_mat
+    }
+
+    remove <- which(
+      xdat[, 1] > Sim_Max * max(ref[, 1], na.rm = TRUE) |
+        xdat[, 2] > Sim_Max * max(ref[, 2], na.rm = TRUE)
+    )
+    if (length(remove) > 0) xdat <- xdat[-remove, , drop = FALSE]
+
+  } else { # Source == "Data"
+    if (is.null(Data)) stop("When Source='Data', you must supply `Data` (Marshalltown, Marengo).")
+    xdat <- Data %>%
+      dplyr::select(Marshalltown, Marengo) %>%
+      stats::na.omit() %>%
+      as.data.frame()
   }
 
-  if (Isoline_Probs == "Sample"){
-    pred <- ks::kde(x=cop_sample, eval.points=Iso)$estimate
+  # ks::kde expects matrices/data.frames with 2 columns
+  pred <- ks::kde(x = xdat, eval.points = Iso_mat, binned = TRUE)$estimate
+
+  # normalize to [0,1] for plotting/contours
+  rng <- range(pred, na.rm = TRUE)
+  contour <- if (is.finite(rng[1]) && is.finite(rng[2]) && rng[2] > rng[1]) {
+    (pred - rng[1]) / (rng[2] - rng[1])
   } else {
-    pred <- ks::kde(x=stats::na.omit(Data), eval.points=Iso)$estimate
+    rep(NA_real_, length(pred))
   }
 
-  contour <- (pred - min(pred)) / (max(pred) - min(pred))
-  list(prediction=pred, contour=contour)
+  list(prediction = pred, contour = contour)
 }
 
-extract_design_events_2d <- function(Iso, prediction, N_Ensemble){
-  idx <- which(prediction == max(prediction, na.rm=TRUE))[1]
-  most <- data.frame(Iso[idx,1], Iso[idx,2])
 
-  # your current "full dependence" is max-x and max-y on the isoline (not true FD, but keep behavior)
-  full <- data.frame(max(Iso[,1]), max(Iso[,2]))
+# Pick "design events" on an isoline in your coordinate system:
+# - Iso: data.frame with marshalltown, marengo columns
+# - prediction: KDE values returned by kde_along_isoline()$prediction
+# - N_Ensemble: number of sampled ensemble points along isoline (weighted by prediction)
+extract_design_events_2d <- function(Iso, prediction, N_Ensemble = 0) {
+
+  Iso_mat <- Iso %>%
+    dplyr::select(marshalltown, marengo) %>%
+    as.data.frame()
+
+  # Most likely = max KDE point on isoline
+  idx <- which(prediction == max(prediction, na.rm = TRUE))[1]
+  most <- data.frame(
+    marshalltown = Iso_mat[idx, 1],
+    marengo      = Iso_mat[idx, 2]
+  )
+
+  # Keep your previous "full dependence" behavior (max x and max y on isoline)
+  full <- data.frame(
+    marshalltown = max(Iso_mat[, 1], na.rm = TRUE),
+    marengo      = max(Iso_mat[, 2], na.rm = TRUE)
+  )
 
   ens <- NULL
-  if (N_Ensemble > 0){
-    ok <- which(prediction > 0)
-    ens <- Iso[sample(ok, size=N_Ensemble, replace=TRUE, prob=prediction[ok]), , drop=FALSE]
+  if (N_Ensemble > 0) {
+    ok <- which(is.finite(prediction) & prediction > 0)
+    if (length(ok) == 0) {
+      ens <- Iso_mat[0, , drop = FALSE]
+    } else {
+      draw <- sample(ok, size = N_Ensemble, replace = TRUE, prob = prediction[ok])
+      ens <- Iso_mat[draw, , drop = FALSE]
+      names(ens) <- c("marshalltown", "marengo")
+    }
   }
 
-  list(MostLikelyEvent=most, FullDependence=full, Ensemble=ens)
+  list(MostLikelyEvent = most, FullDependence = full, Ensemble = ens)
 }
+
+Iso100 <- envelope_curves %>% dplyr::filter(rp == 100)   # or filter(scenario=="A", rp==100)
+
+kde_out <- kde_along_isoline(
+  Iso = Iso100,
+  cop_sample = copula_sample,     # columns: Marshalltown, Marengo
+  Source = "Sample",
+  Sim_Max = 10
+)
+
+design <- extract_design_events_2d(Iso100, kde_out$prediction, N_Ensemble = 200)
+designEvent <- design$MostLikelyEvent
+
+contourLines_kde <- envelope_curves %>%
+  group_by(rp) %>%
+  group_split() %>%
+  map_dfr(function(df_iso){
+
+    kde_out <- kde_along_isoline(
+      Iso        = df_iso,
+      cop_sample = copula_sample,   # columns: Marshalltown, Marengo
+      Source     = "Sample",
+      Sim_Max    = 10
+    )
+
+    df_iso %>%
+      mutate(
+        kde = kde_out$prediction,
+        kde_scaled = kde_out$contour
+      )
+  })
+
 ```
+
+```{r}
+
+data <- rbind(marshalltown_con, marengo_con) %>%
+  select(Marshalltown, Marengo)
+
+kde_contour_plot <- ggplot(contourLines_kde, aes(marshalltown, marengo)) +
+  geom_path(aes(group = rp, color = kde_scaled), size = 1.2) +
+  scale_color_distiller(palette = "RdYlBu", direction = 1,
+                        name = "KDE (scaled)", limits = c(0, 1)) +
+  theme_bw() + coord_fixed(1) +
+  xlim(0, 50000) + ylim(0, 50000) +
+  labs(x = "Marshalltown Flow (cfs)", y = "Marengo Flow (cfs)")
+
+kde_contour_plot
+
+kde_contour_plot +
+  geom_point(data = head(copula_sample, n = 10000),
+             aes(Marshalltown, Marengo),
+             inherit.aes = FALSE,
+             color = "darkgrey", shape = 21) +
+  geom_point(data = data,
+             aes(Marshalltown, Marengo),
+             color = "black", shape = 21) + 
+  geom_point(data = design$MostLikelyEvent,
+             aes(marshalltown, marengo),
+             inherit.aes = FALSE,
+             color = "black", fill = "blue",
+             shape = 23, size = 2, stroke = 1.1)
+```
+
+\
