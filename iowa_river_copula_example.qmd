@@ -8,6 +8,9 @@ author: Avital Breverman
 ```{r}
 rm(list = ls())
 
+# install.packages("remotes")
+# remotes::install_github("rjaneUCF/MultiHazard")
+
 library(dataRetrieval)
 library(tidyverse)
 library(POT)
@@ -17,9 +20,6 @@ library(VineCopula)
 library(MultiHazard)
 library(purrr)
 library(geomtextpath)
-
-# User directory 
-dir <- "C:/Projects/Neptune/CopulaAnalysis/R"
 ```
 
 This code builds two conditional extreme-flow dependence models (Scenario A/B), selects copulas by AIC, generates joint extreme simulations, derives joint return-period contours, merges them into a conservative envelope, and then ranks where along that envelope joint outcomes are most probable using KDE—yielding both curves and a representative “most likely” design point.
@@ -741,7 +741,7 @@ ggplot(contourLines, aes(marshalltown, marengo, color = scenario, linetype = fac
   coord_fixed(ratio = 1)
 
 # View 1/100 joint probability contour from scenario A
-contourLines[contourLines$scenario == "A" & contourLines$rp == "100", ]
+# contourLines[contourLines$scenario == "A" & contourLines$rp == "100", ]
 ```
 
 # Compute Envelope Curve
@@ -946,7 +946,7 @@ extract_design_events_2d <- function(Iso, prediction, N_Ensemble = 0) {
   if (N_Ensemble > 0) {
     # Find indices of isoline points where the KDE values are finite and strictly positive
     ok <- which(is.finite(prediction) & prediction > 0)
-    # If there are no valid KDE weights, return an empty 0-row matrix/data frame with the same number of columns as Iso_met
+    # If there are no valid KDE weights, return an empty 0-row matrix/data frame with the same number of columns as Iso_mat
     if (length(ok) == 0) {
       ens <- Iso_mat[0, , drop = FALSE]
     # Randomly select N_Ensemble indices from the valid set ok
@@ -1061,30 +1061,16 @@ marengo_con_data <- marengo_con %>%
 data <- rbind(marshalltown_con_data, marengo_con_data) %>%
   select(Marshalltown, Marengo, Scenario)
 
-kde_contour_plot <- ggplot(contourLines_kde_100, aes(marshalltown, marengo)) +
-    geomtextpath::geom_textpath(
-    aes(label = rp, group = rp, color = kde_scaled),
-    color = "black", # label color
-    size = 5,
-    text_smoothing = 10,     # helps spacing along the curve
-    vjust = -0.2
-  ) +
-  geom_path(aes(group = rp, color = kde_scaled), size = 1.2) +
-  scale_color_distiller(palette = "RdYlBu", direction = 1,
-                        name = "Relative Probability Density", limits = c(0, 1)) +
-  theme_bw() + coord_fixed(1) +
-  xlim(0, 50000) + ylim(0, 50000) +
-  labs(x = "Marshalltown Flow (cfs)", y = "Marengo Flow (cfs)")
-
-kde_contour_plot
-
-kde_contour_plot +
-  geom_point(
+ggplot(contourLines_kde_100, aes(marshalltown, marengo)) +
+    geom_point(
     data = head(copula_sample, n = 10000),
     aes(x = Marshalltown, y = Marengo),
     inherit.aes = FALSE,
     color = "darkgrey", shape = 21
   ) +
+  geom_path(aes(group = rp, color = kde_scaled), size = 1.2) +
+  scale_color_distiller(palette = "RdYlBu", direction = 1,
+                        name = "Relative Probability Density", limits = c(0, 1)) +
   geom_point(
     data = data,
     aes(x = Marshalltown, y = Marengo, shape = Scenario),
@@ -1111,8 +1097,18 @@ geom_point(
     size = 2,
     stroke = 1.1
   ) +
+    geomtextpath::geom_textpath(
+    aes(label = rp, group = rp, color = kde_scaled),
+    color = "black", # label color
+    size = 5,
+    text_smoothing = 10,     # helps spacing along the curve
+    vjust = -0.2
+  ) +
   scale_fill_manual(
     values = c("Most Likely Event" = "blue"),
     name = ""
-  )
+  ) +
+    theme_bw() + coord_fixed(1) +
+  xlim(0, 80000) + ylim(0, 80000) +
+  labs(x = "Marshalltown Flow (cfs)", y = "Marengo Flow (cfs)") 
 ```
