@@ -1072,7 +1072,7 @@ ggplot(contourLines_kde_100, aes(marshalltown, marengo)) +
     color = "darkgrey", shape = 21
   ) +
   geom_path(aes(group = aep, color = kde_scaled), size = 1.2) +
-  scale_color_distiller(palette = "RdYlBu", direction = 1,
+  scale_color_distiller(palette = "RdYlBu", direction = -1,
                         name = "Relative Probability Density", limits = c(0, 1)) +
   geom_point(
     data = data,
@@ -1088,7 +1088,7 @@ geom_point(
     inherit.aes = FALSE,
     color = "black",
     shape = 23,
-    size = 2,
+    linewidth = 2,
     stroke = 1.1
   ) +
   geom_point(
@@ -1097,22 +1097,22 @@ geom_point(
     inherit.aes = FALSE,
     color = "black",
     shape = 23,
-    size = 2,
+    linewidth = 2,
     stroke = 1.1
   ) +
     geomtextpath::geom_textpath(
     aes(label = aep, group = rp, color = kde_scaled),
     color = "black", # label color
     linetype = 0,   # (or) linetype = 0
-    size = 4,
+    linewidth = 4,
     text_smoothing = 10,     # helps spacing along the curve
     vjust = -0.2
   ) +
   scale_fill_manual(
-    values = c("Most Likely Event" = "blue"),
+    values = c("Most Likely Event" = "red"),
     name = ""
   ) +
     theme_bw() + coord_fixed(1) +
   xlim(0, 80000) + ylim(0, 80000) +
-  labs(x = "Funkytown Flow (cfs)", y = "Gotham Flow (cfs)") 
+  labs(x = "Marshalltown Flow (cfs)", y = "Marengo Flow (cfs)") 
 ```
