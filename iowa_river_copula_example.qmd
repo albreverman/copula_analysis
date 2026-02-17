@@ -184,7 +184,7 @@ pot_marshalltown <- data.frame(
 )
 
 da_marshalltown <- 1532 # square miles
-time_sep <- B17_days_between(da_marengo)
+time_sep <- B17_days_between(da_marshalltown)
 thresh_marshalltown <- 5500 # cfs
 
 # Extract partial duration series
@@ -255,7 +255,6 @@ p_values <- result$Test
 # View tau coefficients
 print(tau_values)
 print(p_values)
-
 
 # Prepare data frame with 3 columns: Date, Variable1, Variable2
 # For auto-correlation, use same variable twice
@@ -381,6 +380,13 @@ ggplot(marengo_con_longer, aes(x = Date, y = Gage, color = series)) +
   theme_bw()
 ```
 
+# Write Datasets to csv
+
+```{r}
+write.csv(marengo_con, file = "marengo_con.csv")
+write.csv(marshalltown_con, file = "marshalltown_con.csv")
+```
+
 # Scenario A Copula Fits and Comparisons
 
 ```{r}
@@ -499,6 +505,45 @@ copula_tbl
 
 # Select the Copula with the minimum AIC (in this scenario, the Joe copula)
 marengo_cop <- joe_cop
+```
+
+# Contour Line Values for Plotting
+
+```{r}
+n <- 60
+u <- v <- seq(0.02, 0.98, length.out = n)
+
+# density on grid
+z <- outer(u, v, function(a, b)
+  BiCopPDF(a, b,
+           family = marengo_cop$family,
+           par    = marengo_cop$par,
+           par2   = marengo_cop$par2)
+)
+
+lev <- c(0.2, 0.6, 1, 1.5, 2, 3, 5, 7)
+
+contour(u, v, z, levels = lev, col = "blue",
+        xlab = "u", ylab = "v",
+        main = sprintf("BiCop density contours", marengo_cop$family))
+lev
+
+cls <- contourLines(u, v, z, levels = lev)
+
+df <- do.call(rbind, lapply(seq_along(cls), function(i) {
+  data.frame(
+    level = cls[[i]]$level,
+    x     = cls[[i]]$x,
+    y     = cls[[i]]$y,
+    line  = i,                        # optional: which polyline (useful if multiple per level)
+    pt    = seq_along(cls[[i]]$x)     # optional: point index along the line
+  )
+}))
+
+# If you truly want only 3 columns, drop line/pt:
+# df <- df[, c("level","x","y")]
+
+write.csv(df, "contours.csv", row.names = FALSE)
 ```
 
 # Copula Simulation and Transformation
