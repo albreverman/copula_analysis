@@ -1,5 +1,5 @@
 ---
-title: "Copula Example"
+title: "Iowa River Copula Example"
 format: html
 editor: visual
 author: Avital Breverman
@@ -141,7 +141,7 @@ pot_marengo <- data.frame(
   time = as.numeric(marengo_daily$Date)  # Convert to numeric
 )
 
-da_marengo <- 2794 # squuare miles
+da_marengo <- 2794 # square miles
 time_sep <- B17_days_between(da_marengo)
 thresh_marengo <- 10000 # cfs
 
@@ -171,7 +171,7 @@ rate_marengo <- nrow(df_pds_marengo) / years_marengo
 # Plot daily flow and PDS
 marengo_plot +
   geom_hline(yintercept = thresh_marengo, linetype = "dashed") +
-  geom_point(data = df_pds_marengo, aes(x = Date, y = Flow),colour = "#A60F2D", shape = 19, size = 2) 
+  geom_point(data = df_pds_marengo, aes(x = Date, y = Flow), colour = "#A60F2D", shape = 19, size = 2) 
 ```
 
 # Extract Marshalltown PDS
@@ -382,6 +382,8 @@ ggplot(marengo_con_longer, aes(x = Date, y = Gage, color = series)) +
 
 # Write Datasets to csv
 
+This code block is for Neptune.
+
 ```{r}
 write.csv(marengo_con, file = "marengo_con.csv")
 write.csv(marshalltown_con, file = "marshalltown_con.csv")
@@ -509,6 +511,8 @@ marengo_cop <- joe_cop
 
 # Contour Line Values for Plotting
 
+This code block is for Neptune
+
 ```{r}
 n <- 60
 u <- v <- seq(0.02, 0.98, length.out = n)
@@ -543,7 +547,7 @@ df <- do.call(rbind, lapply(seq_along(cls), function(i) {
 # If you truly want only 3 columns, drop line/pt:
 # df <- df[, c("level","x","y")]
 
-write.csv(df, "contours.csv", row.names = FALSE)
+write.csv(df, "iowa_river_contours.csv", row.names = FALSE)
 ```
 
 # Copula Simulation and Transformation
