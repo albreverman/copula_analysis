@@ -333,7 +333,7 @@ marengo_gpa <- lmom::pelgpa(lmom::samlmu(marengo_con$Marengo))
 marengo_gev <- madsen_annualization(marengo_gpa, rate_marengo)
 marshalltown_glo <- lmom::pelglo(lmom::samlmu(marengo_con$Marshalltown))
 
-evplot(marshalltown_con$Marshalltown, main = "Marshalltown"); 
+evplot(marshalltown_con$Marshalltown, main = "Marengo"); 
 # evdistq(quagev, para = marshalltown_gev)
 
 marengo_con_gev <- marengo_con %>%
@@ -384,7 +384,7 @@ ggplot(marengo_con_longer, aes(x = Date, y = Gage, color = series)) +
 
 This code block is for Neptune.
 
-```{r}
+```{r eval=FALSE}
 write.csv(marengo_con, file = "marengo_con.csv")
 write.csv(marshalltown_con, file = "marshalltown_con.csv")
 ```
@@ -513,7 +513,7 @@ marengo_cop <- joe_cop
 
 This code block is for Neptune
 
-```{r}
+```{r eval=FALSE}
 n <- 60
 u <- v <- seq(0.02, 0.98, length.out = n)
 
