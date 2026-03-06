@@ -77,7 +77,7 @@ langbein_adjustment <- function(lambda, p_pds) {
 }
 ```
 
-# Import Data from CSV
+# Import Continuous Data from CSV
 
 ```{r}
 surge <- read.csv("RG_Sg_2022.csv", header = TRUE, sep = ",", na.strings = c("-9999")) %>% mutate(Value = Surge,                                                                     Date = as.POSIXct(dstring, format = "%m/%d/%Y %H:%M", tz = "UTC")) %>% select(Date, Value)
@@ -240,7 +240,7 @@ I computed Kendall's tau under 2 scenarios:
 
 -   Rank correlation between the PDS of variable Y (precipitation) and lagged variable X (surge)
 
-```{r}
+```{r eval=FALSE}
 
 lag <- 12 * 24 # -12 to +12 day lags
 
@@ -293,7 +293,24 @@ print(tau_values)
 print(p_values)
 ```
 
-The maximum tau in both scenarios occurs with a lag of 0, meaning that the coincident events should be pulled from the same date as the extremal (PDS) events.
+# Read in PDS and Coincident Events for Both Scenarios
+
+```{r}
+
+surge_con <- read.csv("RG_RoSPairs_3Mar2026.csv", header = TRUE, sep = ",") %>% 
+  mutate(surgeDate = SurgePOTDate,
+         surge = SurgePOT, 
+         precipDate = CoincidentRainDate,
+         precip = CoincidentRain) %>%
+  select(surgeDate, surge, precipDate, precip)
+
+precip_con <- read.csv("RG_SoRPairs_3Mar2026.csv", header = TRUE, sep = ",") %>% 
+  mutate(precipDate = POTRainDate,
+         precip = POTRain, 
+         surgeDate = CoincidentSurgeDate,
+         surge = CoincidentSurge) %>%
+  select(precipDate, precip, surgeDate, surge)
+```
 
 # Scenario A (Extremal Surge) Marginal Distributions
 
@@ -311,7 +328,7 @@ ggplot(surge_con, aes(x = surge, y = precip)) +
 # Fit marginal distributions
 surge_gpa <- lmom::pelgpa(lmom::samlmu(surge_con$surge)) 
 surge_gev <- madsen_annualization(surge_gpa, rate_surge)
-precip_glo <- lmom::pelglo(lmom::samlmu(surge_con$precip))
+precip_glo <- lmom::pelglo(lmom::samlmu(surge_con$precip)) 
 
 evplot(surge_con$surge, main = surge_label); 
 #evdistq(quagev, para = surge_gev)
@@ -341,70 +358,26 @@ ggplot(precip_con, aes(x = precip, y = surge)) +
 # Fit marginal distributions
 precip_gpa <- lmom::pelgpa(lmom::samlmu(precip_con$precip)) 
 precip_gev <- madsen_annualization(precip_gpa, rate_precip)
-surge_glo <- lmom::pelglo(lmom::samlmu(precip_con$surge))
+surge_glo <- lmom::pelglo(lmom::samlmu(precip_con$surge)) 
 
 evplot(precip_con$precip, main = precip_label); 
 #evdistq(quagev, para = precip_gev)
 
 precip_con_gev <- precip_con %>%
   mutate(precip_cdf = lmom::cdfgev(precip, precip_gev),
-         surge_cdf = lmom::cdfglo(surge, surge))
+         surge_cdf = lmom::cdfglo(surge, surge_glo))
 
 precip_con_gpa <- precip_con %>%
   mutate(precip_cdf = lmom::cdfgpa(precip, precip_gpa),
-         surge_cdf = lmom::cdfglo(surge, surge))
-```
-
-# Plot Coincident Events for Each Scenario
-
-```{r}
-
-surge_con_longer <- surge_con |>
-pivot_longer(cols = -Date, names_to = "series", values_to = "Variable")
-
-ggplot(X_con_longer, aes(x = Date, y = Gage, color = series)) +
-  geom_point(size = 2) +
-    geom_hline(yintercept = thresh_X, color = "#A60F2D", linetype = "solid") +
-    labs(color = "Variable") + 
-  scale_color_manual(                            
-    values = c(
-      X = "#A60F2D",
-      Y = "black")) +
-  ylab("") +
-  ggtitle("Scenario A: Extremal Surge, Coincident Precipitation") +
-  theme_bw()
-
-y_con_longer <- y_con |>
-  pivot_longer(cols = -Date, names_to = "series", values_to = "Gage")
-
-ggplot(y_con_longer, aes(x = Date, y = Gage, color = series)) +
-  geom_point(size = 2) +
-    geom_hline(yintercept = thresh_Y, color = "#A60F2D", linetype = "solid") +
-    labs(color = "Gage") +
-  scale_color_manual(                            
-    values = c(
-      Y = "#A60F2D",
-      X = "black")) +
-  ylab("") +
-  ggtitle("Scenario B: Extremal Precipitation, Coincident Surge") +
-  theme_bw()
-```
-
-# Write Datasets to csv
-
-This code block is for Neptune.
-
-```{r}
-write.csv(X_con, file = "X_con.csv")
-write.csv(Y_con, file = "Y_con.csv")
+         surge_cdf = lmom::cdfglo(surge, surge_glo))
 ```
 
 # Scenario A Copula Fits and Comparisons
 
 ```{r}
 
-u <- pull(X_con_gpa, x_cdf)
-v <- pull(X_con_gpa, y_cdf)
+u <- pull(surge_con_gpa, surge_cdf)
+v <- pull(surge_con_gpa, precip_cdf)
 
 gumbel_cop <- BiCopEst(u, v, family = 4)
 print(gumbel_cop$AIC)
@@ -455,16 +428,16 @@ copula_tbl <- dplyr::bind_rows(
 
 copula_tbl
 
-# Select the Copula with the minimum AIC (in this scenario, the Joe copula)
-X_con_copula <- joe_cop
+# Select the Copula with the minimum AIC (in this scenario, the Gaussian copula)
+surge_con_copula <- gauss_cop
 ```
 
 # Scenario B Copula Fits and Comparisons
 
 ```{r}
 
-u <- pull(Y_con_gpa, y_cdf)
-v <- pull(Y_con_gpa, x_cdf)
+u <- pull(precip_con_gpa, precip_cdf)
+v <- pull(precip_con_gpa, surge_cdf)
 
 gumbel_cop <- BiCopEst(u, v, family = 4)
 print(gumbel_cop$AIC)
@@ -515,49 +488,8 @@ copula_tbl <- dplyr::bind_rows(
 
 copula_tbl
 
-# Select the Copula with the minimum AIC (in this scenario, the Joe copula)
-Y_con_copula <- joe_cop
-```
-
-# Contour Line Values for Plotting
-
-This code block is for Neptune
-
-```{r}
-n <- 60
-u <- v <- seq(0.02, 0.98, length.out = n)
-
-# density on grid
-z <- outer(u, v, function(a, b)
-  BiCopPDF(a, b,
-           family = marengo_cop$family,
-           par    = marengo_cop$par,
-           par2   = marengo_cop$par2)
-)
-
-lev <- c(0.2, 0.6, 1, 1.5, 2, 3, 5, 7)
-
-contour(u, v, z, levels = lev, col = "blue",
-        xlab = "u", ylab = "v",
-        main = sprintf("BiCop density contours", marengo_cop$family))
-lev
-
-cls <- contourLines(u, v, z, levels = lev)
-
-df <- do.call(rbind, lapply(seq_along(cls), function(i) {
-  data.frame(
-    level = cls[[i]]$level,
-    x     = cls[[i]]$x,
-    y     = cls[[i]]$y,
-    line  = i,                        # optional: which polyline (useful if multiple per level)
-    pt    = seq_along(cls[[i]]$x)     # optional: point index along the line
-  )
-}))
-
-# If you truly want only 3 columns, drop line/pt:
-# df <- df[, c("level","x","y")]
-
-write.csv(df, "coastal_contours.csv", row.names = FALSE)
+# Select the Copula with the minimum AIC (in this scenario, the Gaussian copula)
+precip_con_copula <- gauss_cop
 ```
 
 # Copula Simulation and Transformation
@@ -568,14 +500,14 @@ Generate a large number of samples). Split the number of samples across the two 
 
 ```{r}
 N <- 10^6
-n_A <- nrow(marshalltown_con) # Number of coincident events in scenario A
-n_B <- nrow(marengo_con) # Number of coincident events in scenario B
+n_A <- nrow(surge_con) # Number of coincident events in scenario A
+n_B <- nrow(precip_con) # Number of coincident events in scenario B
 n1 <- round((N * n_A) / (n_A + n_B), 0)
 n2 <- N - n1
 
 # Simulate U(0,1)^2 from each fitted copula
-s1 <- VineCopula::BiCopSim(n1, obj = marshalltown_cop)
-s2 <- VineCopula::BiCopSim(n2, obj = marengo_cop)
+s1 <- VineCopula::BiCopSim(n1, obj = surge_con_copula)
+s2 <- VineCopula::BiCopSim(n2, obj = precip_con_copula)
 
 #plot(head(s1, 1000))
 ```
@@ -586,22 +518,22 @@ Transform the simulated uniforms to original units using quantile functions.
 
 ```{r}
 # Scenario A
-marshalltown_gev <- lmomco::vec2par(marshalltown_gev, type = "gev")
-marengo_glo <- lmomco::vec2par(marengo_glo, type = "glo")
+surge_gev <- lmomco::vec2par(surge_gev, type = "gev")
+precip_glo <- lmomco::vec2par(precip_glo, type = "glo")
 
-marshalltown_A <- quagev(s1[,1], marshalltown_gev)
-marengo_A <- quaglo(s1[,2], marengo_glo)
+surge_A <- quagev(s1[,1], surge_gev)
+precip_A <- quaglo(s1[,2], precip_glo)
 
-copula_sample_A <- data.frame(Marshalltown = marshalltown_A, Marengo = marengo_A)
+copula_sample_A <- data.frame(surge = surge_A, precip = precip_A)
 
 # Scenario B
-marengo_gev <- vec2par(marengo_gev, type = "gev")
-marshalltown_glo <- vec2par(marshalltown_glo, type = "glo")
+precip_gev <- vec2par(precip_gev, type = "gev")
+surge_glo <- vec2par(surge_glo, type = "glo")
 
-marengo_B <- quagev(s2[,1], marengo_gev)
-marshalltown_B <- quaglo(s2[,2], marshalltown_glo)
+precip_B <- quagev(s2[,1], precip_gev)
+surge_B <- quaglo(s2[,2], surge_glo)
 
-copula_sample_B <- data.frame(Marshalltown = marshalltown_B, Marengo = marengo_B)
+copula_sample_B <- data.frame(surge = surge_B, precip = precip_B)
 
 # Combine samples from both scenarios; used in KDE 
 copula_sample <- rbind(copula_sample_A, copula_sample_B)
@@ -625,8 +557,8 @@ Evaluate the copula CDF at each point on the grid.
 
 ```{r}
 # Evaluates CDF of the specified parametric copula
-uCopA <- VineCopula::BiCopCDF(u[,1], u[,2], marshalltown_cop) 
-uCopB <- VineCopula::BiCopCDF(u[,1], u[,2], marengo_cop) 
+uCopA <- VineCopula::BiCopCDF(u[,1], u[,2], surge_con_copula, check.pars = FALSE)
+uCopB <- VineCopula::BiCopCDF(u[,1], u[,2], precip_con_copula, check.pars = FALSE) 
 ```
 
 ## Determine Return Period
@@ -660,8 +592,8 @@ make_z_surface_blocked <- function(x, y, Cmat, mean_waiting_time, block = 500L){
 
 ```{r}
 
-# Mean waiting time is the average time, in days, between events
-mean_waiting_time_A <- mu / rate_marshalltown 
+# Mean waiting time is the average time, in hours, between events
+mean_waiting_time_A <- mu / rate_surge 
 
 # Reshape into a matrix: rows correspond to x, columns correspond to y
 # IMPORTANT: expand.grid(x,y) varies x fastest, then y
@@ -675,15 +607,37 @@ xy50 <- grDevices::contourLines(x, y, z, levels = mu * rp_50)
 if (length(xy50) == 0) stop("No contour found for RP = ", rp_50)
 
 contourLines_A_50 <- do.call(rbind, lapply(seq_along(xy50), function(i){
-  data.frame(id=i, level=xy50[[i]]$level, marshalltown_cdf=xy50[[i]]$x, marengo_cdf=xy50[[i]]$y, rp = rp_50)
+  data.frame(id=i, level=xy50[[i]]$level, surge_cdf=xy50[[i]]$x, precip_cdf=xy50[[i]]$y, rp = rp_50)
 }))
 
 
 rp_100 <- 100
 xy100 <- grDevices::contourLines(x, y, z, levels = mu * rp_100)
 
+if (length(xy100) == 0) stop("No contour found for RP = ", rp_100)
+
 contourLines_A_100 <- do.call(rbind, lapply(seq_along(xy100), function(i){
-  data.frame(id=i, level=xy100[[i]]$level, marshalltown_cdf=xy100[[i]]$x, marengo_cdf=xy100[[i]]$y, rp = rp_100)
+  data.frame(id=i, level=xy100[[i]]$level, surge_cdf=xy100[[i]]$x, precip_cdf=xy100[[i]]$y, rp = rp_100)
+}))
+
+
+rp_200 <- 200
+xy200 <- grDevices::contourLines(x, y, z, levels = mu * rp_200)
+
+if (length(xy200) == 0) stop("No contour found for RP = ", rp_200)
+
+contourLines_A_200 <- do.call(rbind, lapply(seq_along(xy200), function(i){
+  data.frame(id=i, level=xy200[[i]]$level, surge_cdf=xy200[[i]]$x, precip_cdf=xy200[[i]]$y, rp = rp_200)
+}))
+
+
+rp_500 <- 500
+xy500 <- grDevices::contourLines(x, y, z, levels = mu * rp_500)
+
+if (length(xy500) == 0) stop("No contour found for RP = ", rp_500)
+
+contourLines_A_500 <- do.call(rbind, lapply(seq_along(xy500), function(i){
+  data.frame(id=i, level=xy500[[i]]$level, surge_cdf=xy500[[i]]$x, precip_cdf=xy500[[i]]$y, rp = rp_500)
 }))
 ```
 
@@ -691,8 +645,8 @@ contourLines_A_100 <- do.call(rbind, lapply(seq_along(xy100), function(i){
 
 ```{r}
 
-# Mean waiting time is the average time, in days, between events
-mean_waiting_time_B <- mu / rate_marengo
+# Mean waiting time is the average time, in hours, between events
+mean_waiting_time_B <- mu / rate_precip
 
 # Reshape into a matrix: rows correspond to x, columns correspond to y
 # IMPORTANT: expand.grid(x,y) varies x fastest, then y
@@ -706,15 +660,37 @@ xy50 <- grDevices::contourLines(x, y, z, levels = mu * rp_50)
 if (length(xy50) == 0) stop("No contour found for RP = ", rp_50)
 
 contourLines_B_50 <- do.call(rbind, lapply(seq_along(xy50), function(i){
-  data.frame(id=i, level=xy50[[i]]$level, marshalltown_cdf=xy50[[i]]$x, marengo_cdf=xy50[[i]]$y, rp = rp_50)
+  data.frame(id=i, level=xy50[[i]]$level, surge_cdf=xy50[[i]]$x, precip_cdf=xy50[[i]]$y, rp = rp_50)
 }))
 
 
 rp_100 <- 100
 xy100 <- grDevices::contourLines(x, y, z, levels = mu * rp_100)
 
+if (length(xy100) == 0) stop("No contour found for RP = ", rp_100)
+
 contourLines_B_100 <- do.call(rbind, lapply(seq_along(xy100), function(i){
-  data.frame(id=i, level=xy100[[i]]$level, marshalltown_cdf=xy100[[i]]$x, marengo_cdf=xy100[[i]]$y, rp = rp_100)
+  data.frame(id=i, level=xy100[[i]]$level, surge_cdf=xy100[[i]]$x, precip_cdf=xy100[[i]]$y, rp = rp_100)
+}))
+
+
+rp_200 <- 200
+xy200 <- grDevices::contourLines(x, y, z, levels = mu * rp_200)
+
+if (length(xy200) == 0) stop("No contour found for RP = ", rp_200)
+
+contourLines_B_200 <- do.call(rbind, lapply(seq_along(xy200), function(i){
+  data.frame(id=i, level=xy200[[i]]$level, surge_cdf=xy200[[i]]$x, precip_cdf=xy200[[i]]$y, rp = rp_200)
+}))
+
+
+rp_500 <- 500
+xy500 <- grDevices::contourLines(x, y, z, levels = mu * rp_500)
+
+if (length(xy500) == 0) stop("No contour found for RP = ", rp_500)
+
+contourLines_B_500 <- do.call(rbind, lapply(seq_along(xy500), function(i){
+  data.frame(id=i, level=xy500[[i]]$level, surge_cdf=xy500[[i]]$x, precip_cdf=xy500[[i]]$y, rp = rp_500)
 }))
 ```
 
@@ -724,14 +700,14 @@ contourLines_B_100 <- do.call(rbind, lapply(seq_along(xy100), function(i){
 
 ```{r}
 
-contourLines_A <- rbind(contourLines_A_50, contourLines_A_100)
-p_pds <- contourLines_A$marshalltown_cdf
-p_marshalltown_A <- langbein_adjustment(rate_marshalltown, p_pds) # Annualized probabilities for Marshalltown
+contourLines_A <- rbind(contourLines_A_50, contourLines_A_100, contourLines_A_200, contourLines_A_500)
+p_pds <- contourLines_A$surge_cdf
+p_surge_A <- langbein_adjustment(rate_surge, p_pds) # Annualized probabilities for surge
 
 contourLines_A <- contourLines_A %>%
-  mutate(marshalltown_annualized_p = p_marshalltown_A,
-         marshalltown = quagev(marshalltown_annualized_p, marshalltown_gev),
-         marengo = quaglo(marengo_cdf, marengo_glo),
+  mutate(surge_annualized_p = p_surge_A,
+         surge = quagev(surge_annualized_p, surge_gev),
+         precip = quaglo(precip_cdf, precip_glo),
          scenario = "A")
 ```
 
@@ -739,14 +715,14 @@ contourLines_A <- contourLines_A %>%
 
 ```{r}
 
-contourLines_B <- rbind(contourLines_B_50, contourLines_B_100)
-p_pds <- contourLines_B$marengo_cdf
-p_marengo_B <- langbein_adjustment(rate_marengo, p_pds) # Annualized probabilities for Marengo
+contourLines_B <- rbind(contourLines_B_50, contourLines_B_100, contourLines_B_200, contourLines_B_500)
+p_pds <- contourLines_B$precip_cdf
+p_precip_B <- langbein_adjustment(rate_precip, p_pds) # Annualized probabilities for precip
 
 contourLines_B <- contourLines_B %>%
-  mutate(marengo_annualized_p = p_marengo_B,
-         marengo = quagev(marengo_annualized_p, marengo_gev),
-         marshalltown = quaglo(marshalltown_cdf, marshalltown_glo),
+  mutate(precip_annualized_p = p_precip_B,
+         precip = quagev(precip_annualized_p, precip_gev),
+         surge = quaglo(surge_cdf, surge_glo),
          scenario = "B")
 ```
 
@@ -754,50 +730,49 @@ contourLines_B <- contourLines_B %>%
 
 ```{r}
 
-ggplot(contourLines_A, aes(marshalltown, marengo, group = rp)) +
+ggplot(contourLines_A, aes(surge, precip, group = rp)) +
   geom_path(linewidth = 1) +
   theme_bw() +
-  xlab("Marshalltown Flow (cfs)") +
-  ylab("Marengo Flow (cfs)") +
-  ggtitle("Scenario A: Extremal Marshalltown Flows") +
-  xlim(0, 40000) +
-  ylim(0, 40000) +
-  coord_fixed(ratio = 1)
+  xlab("Surge (m)") +
+  ylab("Precipitation (mm)") +
+  ggtitle("Scenario A: Extremal Surge, Coincident Coincident") +
+  xlim(0, 3) +
+  ylim(0, 150) 
 
-ggplot(contourLines_B, aes(marengo, marshalltown, group = rp)) +
+ggplot(contourLines_B, aes(precip, surge, group = rp)) +
   geom_path(linewidth = 1) +
   theme_bw() +
-  xlab("Marengo Flow (cfs)") +
-  ylab("Marshalltown Flow (cfs)") +
-  ggtitle("Scenario B: Extremal Marengo Flows") +
-  xlim(0, 50000) +
-  ylim(0, 50000) +
-  coord_fixed(ratio = 1)
+  xlab("Precipitation (mm)") +
+  ylab("Surge (m)") +
+  ggtitle("Scenario B: Extremal Precipitation, Coincident Surge") +
+  xlim(0, 100) +
+  ylim(0, 5) 
 
 contourLines_A_common_cols <- contourLines_A %>%
-  select(rp, marshalltown, marengo, scenario)
+  select(rp, surge, precip, scenario)
 
 contourLines_B_common_cols <- contourLines_B %>%
-  select(rp, marshalltown, marengo, scenario)
+  select(rp, surge, precip, scenario)
 
 contourLines <- rbind(contourLines_A_common_cols, contourLines_B_common_cols)
 
-ggplot(contourLines, aes(marshalltown, marengo, color = scenario, linetype = factor(rp))) +
+ggplot(contourLines, aes(surge, precip, color = scenario, linetype = factor(rp))) +
   geom_path(linewidth = 1) +
     scale_color_manual(values = c(
     "A" = "darkgreen",
     "B" = "purple")) +
   scale_linetype_manual(values = c(
     "50" = "dashed",
-    "100" = "solid")) +
-  xlim(0, 50000) +
-  ylim(0, 50000) +
+    "100" = "solid",
+    "200" = "dotted",
+    "500" = "twodash")) +
+  xlim(0, 5) +
+  ylim(0, 100) +
   theme_bw() +
   labs(color = "Scenario", linetype = "Return Period (years)") +
-  xlab("Marshalltown Flow (cfs)") +
-  ylab("Marengo Flow (cfs)") +
-  ggtitle("") +
-  coord_fixed(ratio = 1)
+  xlab("Surge (m)") +
+  ylab("Precipitation (mm)") +
+  ggtitle("")
 
 # View 1/100 joint probability contour from scenario A
 # contourLines[contourLines$scenario == "A" & contourLines$rp == "100", ]
@@ -817,12 +792,12 @@ make_envelope <- function(df_rp, n_grid = 500L) {
   # Drop rows where marshalltown (x) or marengo (y) are missing/non-finite
   # Sorts by marshalltown values
   df_rp <- df_rp %>%
-    filter(is.finite(marshalltown), is.finite(marengo)) %>%
-    arrange(marshalltown)
+    filter(is.finite(surge), is.finite(precip)) %>%
+    arrange(surge)
 
   # Create a common x-grid over the range covered by the isolines
   # Builds xg, a sequence from the minimum to maximum marshalltown in the data,        with n_grid points
-  xg <- seq(min(df_rp$marshalltown), max(df_rp$marshalltown), length.out = n_grid)
+  xg <- seq(min(df_rp$surge), max(df_rp$precip), length.out = n_grid)
 
   # Interpolate each scenario separately (safer than interpolating across mixed        curves)
   # Splits data by scenario
@@ -835,11 +810,11 @@ make_envelope <- function(df_rp, n_grid = 500L) {
     group_by(scenario) %>%
     group_split() %>%
     map(function(d) {
-      d <- d %>% arrange(marshalltown)
+      d <- d %>% arrange(surge)
       # approx requires unique x to behave well
-      d <- d %>% distinct(marshalltown, .keep_all = TRUE)
+      d <- d %>% distinct(surge, .keep_all = TRUE)
 
-      approx(x = d$marshalltown, y = d$marengo, xout = xg,
+      approx(x = d$surge, y = d$precip, xout = xg,
              rule = 1, ties = "ordered")$y
     })
 
@@ -849,9 +824,9 @@ make_envelope <- function(df_rp, n_grid = 500L) {
   # Return a table
   tibble(
     rp = unique(df_rp$rp),
-    marshalltown = xg,
-    marengo = yenv) %>%
-    dplyr::filter(marshalltown >= 0, marengo >= 0)
+    surge = xg,
+    precip = yenv) %>%
+    dplyr::filter(precip >= 0)
 }
 ```
 
@@ -874,12 +849,12 @@ envelope_curves
 contourLinesPlot <- ggplot() +
   geom_path(
     data = contourLines,
-    aes(marshalltown, marengo, color = scenario, linetype = factor(rp)),
+    aes(surge, precip, color = scenario, linetype = factor(rp)),
     linewidth = 0.8, alpha = 0.7
   ) +
   geom_path(
     data = envelope_curves,
-    aes(marshalltown, marengo, linetype = factor(rp)),
+    aes(surge, precip, linetype = factor(rp)),
     color = "black", linewidth = 1.2
   ) +
   scale_color_manual(values = c(
@@ -888,15 +863,16 @@ contourLinesPlot <- ggplot() +
   )) +
   scale_linetype_manual(values = c(
     "50"  = "dashed",
-    "100" = "solid"
+    "100" = "solid",
+    "200" = "dotted",
+    "500" = "twodash"
   )) +
   theme_bw() +
-  coord_fixed(ratio = 1) +
   labs(
     color = "Scenario",
     linetype = "Return Period (years)",
-    x = "Marshalltown Flow (cfs)",
-    y = "Marengo Flow (cfs)"
+    x = "Surge (m)",
+    y = "Precipitation (mm)"
   )
 
 contourLinesPlot
@@ -908,11 +884,11 @@ contourLinesPlot
 
 Compute the KDE values along an isoline in *flow space* using your objects:
 
--   Iso: data.frame/tibble with columns marshalltown, marengo (one RP + one scenario, or already merged)
+-   Iso: data.frame/tibble with columns Surge, Precip (one RP + one scenario, or already merged)
 
--   cop_sample: your simulated samples data.frame with columns Marshalltown, Marengo (flow space)
+-   cop_sample: your simulated samples data.frame with columns Surge, Precip (realspace)
 
--   Data: optional observed data in flow space with same two columns; used when Source="Data"
+-   Data: optional observed data in realspace with same two columns; used when Source="Data"
 
 -   Source: "Sample" (default; uses copula simulations) or "Data" (uses observed pairs)
 
@@ -932,17 +908,17 @@ kde_along_isoline <- function(Iso,
   Source <- match.arg(Source)
 
   # Keep exactly these rows and order
-  Iso2 <- Iso %>% dplyr::select(marshalltown, marengo)
+  Iso2 <- Iso %>% dplyr::select(surge, precip)
 
   # eval.points must be an n×2 numeric matrix for ks::kde
   Iso_mat <- as.matrix(Iso2)
   storage.mode(Iso_mat) <- "double"
 
   if (Source == "Sample") {
-    xdat <- cop_sample %>% dplyr::select(Marshalltown, Marengo) %>% as.matrix()
+    xdat <- cop_sample %>% dplyr::select(surge, precip) %>% as.matrix()
     storage.mode(xdat) <- "double"
 
-    ref <- if (!is.null(Data)) Data %>% dplyr::select(Marshalltown, Marengo) else Iso2
+    ref <- if (!is.null(Data)) Data %>% dplyr::select(surge, precip) else Iso2
 
     remove <- which(
       xdat[,1] > Sim_Max * max(ref[[1]], na.rm=TRUE) |
@@ -951,7 +927,7 @@ kde_along_isoline <- function(Iso,
     if (length(remove) > 0) xdat <- xdat[-remove, , drop = FALSE]
   } else {
     if (is.null(Data)) stop("When Source='Data', supply `Data`.")
-    xdat <- Data %>% dplyr::select(Marshalltown, Marengo) %>% na.omit() %>% as.matrix()
+    xdat <- Data %>% dplyr::select(surge, precip) %>% na.omit() %>% as.matrix()
     storage.mode(xdat) <- "double"
   }
 
@@ -985,20 +961,20 @@ Fine "design events" or "most likely events" on an isoline. The "most likely eve
 extract_design_events_2d <- function(Iso, prediction, N_Ensemble = 0) {
 
   Iso_mat <- Iso %>%
-    dplyr::select(marshalltown, marengo) %>%
+    dplyr::select(surge, precip) %>%
     as.data.frame()
 
   # Most likely = max KDE point on isoline
   idx <- which(prediction == max(prediction, na.rm = TRUE))[1]
   most <- data.frame(
-    marshalltown = Iso_mat[idx, 1],
-    marengo      = Iso_mat[idx, 2]
+    surge = Iso_mat[idx, 1],
+    precip      = Iso_mat[idx, 2]
   )
 
   # Keep your previous "full dependence" behavior (max x and max y on isoline)
   full <- data.frame(
-    marshalltown = max(Iso_mat[, 1], na.rm = TRUE),
-    marengo      = max(Iso_mat[, 2], na.rm = TRUE)
+    surge = max(Iso_mat[, 1], na.rm = TRUE),
+    precip      = max(Iso_mat[, 2], na.rm = TRUE)
   )
 
   ens <- NULL # Initialize ensemble output as NULL
@@ -1015,12 +991,86 @@ extract_design_events_2d <- function(Iso, prediction, N_Ensemble = 0) {
       # Extracts the sampled isoline coordinates corresponding to the chosen indices
       ens <- Iso_mat[draw, , drop = FALSE]
       # Label the two columns
-      names(ens) <- c("marshalltown", "marengo")
+      names(ens) <- c("surge", "precip")
     }
   }
 
   list(MostLikelyEvent = most, FullDependence = full, Ensemble = ens)
 }
+```
+
+## KDE and Design Event for 1/500 AEP Contour
+
+```{r}
+Iso500 <- envelope_curves %>% dplyr::filter(rp == 500)   # or filter(scenario=="A", rp==100)
+
+kde_out500 <- kde_along_isoline(
+  Iso = Iso500,
+  cop_sample = copula_sample,     
+  gridsize = c(400, 400)
+)
+
+design500 <- extract_design_events_2d(Iso500, kde_out500$prediction, N_Ensemble = 200)
+designEvent500 <- design500$MostLikelyEvent
+
+contourLines_kde_500 <- envelope_curves %>%
+  dplyr::group_by(rp) %>%
+  dplyr::group_split() %>%
+  purrr::map_dfr(function(df_iso) {
+
+    kde_out_i <- kde_along_isoline(
+      Iso        = df_iso,
+      cop_sample = copula_sample,
+      Source     = "Sample",
+      Sim_Max    = 10,
+      gridsize   = c(400, 400)
+    )
+
+    stopifnot(length(kde_out_i$prediction) == nrow(df_iso))
+
+    df_iso %>%
+      dplyr::mutate(
+        kde        = kde_out_i$prediction,
+        kde_scaled = kde_out_i$contour
+      )
+  })
+```
+
+## KDE and Design Event for 1/200 AEP Contour
+
+```{r}
+Iso200 <- envelope_curves %>% dplyr::filter(rp == 200)   # or filter(scenario=="A", rp==100)
+
+kde_out200 <- kde_along_isoline(
+  Iso = Iso200,
+  cop_sample = copula_sample,     
+  gridsize = c(400, 400)
+)
+
+design200 <- extract_design_events_2d(Iso200, kde_out200$prediction, N_Ensemble = 200)
+designEvent200 <- design200$MostLikelyEvent
+
+contourLines_kde_200 <- envelope_curves %>%
+  dplyr::group_by(rp) %>%
+  dplyr::group_split() %>%
+  purrr::map_dfr(function(df_iso) {
+
+    kde_out_i <- kde_along_isoline(
+      Iso        = df_iso,
+      cop_sample = copula_sample,
+      Source     = "Sample",
+      Sim_Max    = 10,
+      gridsize   = c(400, 400)
+    )
+
+    stopifnot(length(kde_out_i$prediction) == nrow(df_iso))
+
+    df_iso %>%
+      dplyr::mutate(
+        kde        = kde_out_i$prediction,
+        kde_scaled = kde_out_i$contour
+      )
+  })
 ```
 
 ## KDE and Design Event for 1/100 AEP Contour
@@ -1030,7 +1080,7 @@ Iso100 <- envelope_curves %>% dplyr::filter(rp == 100)   # or filter(scenario=="
 
 kde_out100 <- kde_along_isoline(
   Iso = Iso100,
-  cop_sample = copula_sample,     # columns: Marshalltown, Marengo
+  cop_sample = copula_sample,     
   gridsize = c(400, 400)
 )
 
@@ -1111,22 +1161,22 @@ Plot the envelope isolines colored by relative density (KDE-scaled), with return
 
 ```{r}
 
-marshalltown_con_data <- marshalltown_con %>%
-  mutate(Scenario = "Marshalltown_Conditioning")
+surge_con_data <- surge_con %>%
+  mutate(Scenario = "Surge_Conditioning")
 
-marengo_con_data <- marengo_con %>%
-  mutate(Scenario = "Marengo_Conditioning")
+precip_con_data <- precip_con %>%
+  mutate(Scenario = "Precipitation_Conditioning")
 
-data <- rbind(marshalltown_con_data, marengo_con_data) %>%
-  select(Marshalltown, Marengo, Scenario)
+data <- rbind(surge_con_data, precip_con_data) %>%
+  select(surge, precip, Scenario)
 
 contourLines_kde_100 <- contourLines_kde_100 %>%
   mutate(aep = 1/rp)
 
-ggplot(contourLines_kde_100, aes(marshalltown, marengo)) +
+ggplot(contourLines_kde_100, aes(surge, precip)) +
     geom_point(
     data = head(copula_sample, n = 10000),
-    aes(x = Marshalltown, y = Marengo),
+    aes(x = surge, y = precip),
     inherit.aes = FALSE,
     color = "darkgrey", shape = 21
   ) +
@@ -1135,15 +1185,33 @@ ggplot(contourLines_kde_100, aes(marshalltown, marengo)) +
                         name = "Relative Probability Density", limits = c(0, 1)) +
   geom_point(
     data = data,
-    aes(x = Marshalltown, y = Marengo, shape = Scenario),
+    aes(x = surge, y = precip, shape = Scenario),
     inherit.aes = FALSE,
-    color = c(Marshalltown_Conditioning = "darkgreen", Marengo_Conditioning = "purple")[data$Scenario],
+    color = c(Surge_Conditioning = "darkgreen", Precipitation_Conditioning = "purple")[data$Scenario],
     size = 2, stroke = 1
   ) +
-  scale_shape_manual(values = c(Marshalltown_Conditioning = 1, Marengo_Conditioning = 4), name = "Scenario") +
+  scale_shape_manual(values = c(Surge_Conditioning = 1, Precipitation_Conditioning = 4), name = "Scenario") +
+    geom_point(
+    data = design500$MostLikelyEvent,
+    aes(x = surge, y = precip, fill = "Most Likely Event"),
+    inherit.aes = FALSE,
+    color = "black",
+    shape = 23,
+    linewidth = 2,
+    stroke = 1.1
+  ) +
+  geom_point(
+    data = design200$MostLikelyEvent,
+    aes(x = surge, y = precip, fill = "Most Likely Event"),
+    inherit.aes = FALSE,
+    color = "black",
+    shape = 23,
+    linewidth = 2,
+    stroke = 1.1
+  ) +
 geom_point(
     data = design100$MostLikelyEvent,
-    aes(x = marshalltown, y = marengo, fill = "Most Likely Event"),
+    aes(x = surge, y = precip, fill = "Most Likely Event"),
     inherit.aes = FALSE,
     color = "black",
     shape = 23,
@@ -1152,7 +1220,7 @@ geom_point(
   ) +
   geom_point(
     data = design50$MostLikelyEvent,
-    aes(x = marshalltown, y = marengo, fill = "Most Likely Event"),
+    aes(x = surge, y = precip, fill = "Most Likely Event"),
     inherit.aes = FALSE,
     color = "black",
     shape = 23,
@@ -1171,7 +1239,8 @@ geom_point(
     values = c("Most Likely Event" = "red"),
     name = ""
   ) +
-    theme_bw() + coord_fixed(1) +
-  xlim(0, 80000) + ylim(0, 80000) +
-  labs(x = "Marshalltown Flow (cfs)", y = "Marengo Flow (cfs)") 
+    theme_bw() + 
+  #coord_fixed(1) +
+  xlim(0, 5) + ylim(0, 100) +
+  labs(x = "Surge (m)", y = "Precipitation (mm)") 
 ```
