@@ -304,7 +304,7 @@ marshalltown_gev <- madsen_annualization(marshalltown_gpa, rate_marshalltown)
 marengo_glo <- lmom::pelglo(lmom::samlmu(marshalltown_con$Marengo))
 
 evplot(marshalltown_con$Marshalltown, main = "Marshalltown"); 
-# evdistq(quagev, para = marshalltown_gev)
+#evdistq(quagev, para = marshalltown_gev)
 
 marshalltown_con_gev <- marshalltown_con %>%
   mutate(marshalltown_cdf = lmom::cdfgev(Marshalltown, marshalltown_gev),
@@ -619,6 +619,14 @@ uCopA <- VineCopula::BiCopCDF(u[,1], u[,2], marshalltown_cop)
 uCopB <- VineCopula::BiCopCDF(u[,1], u[,2], marengo_cop) 
 ```
 
+## User-specified Joint Return Periods
+
+```{r}
+
+# Return periods
+rp_vec <- c(10, 50, 100, 200, 500)
+```
+
 ## Determine Return Period
 
 Determine the return period of each point on the unit square.
@@ -646,7 +654,38 @@ make_z_surface_blocked <- function(x, y, Cmat, mean_waiting_time, block = 500L){
 }
 ```
 
-### Scenario A Return Period
+## Compute Contour Lines
+
+```{r}
+compute_contour_lines <- function(
+    return_periods,
+    x, y, z,
+    mu,
+    stop_on_missing = TRUE
+) {
+  purrr::map_dfr(return_periods, function(rp) {
+
+    xy <- grDevices::contourLines(x, y, z, levels = mu * rp)
+
+    if (length(xy) == 0) {
+      msg <- paste("No contour found for RP =", rp)
+      if (stop_on_missing) stop(msg) else { warning(msg); return(NULL) }
+    }
+
+    do.call(rbind, lapply(seq_along(xy), function(i) {
+      data.frame(
+        id                = i,
+        level             = xy[[i]]$level,
+        marshalltown_cdf  = xy[[i]]$x,
+        marengo_cdf       = xy[[i]]$y,
+        rp                = rp
+      )
+    }))
+  })
+}
+```
+
+### Scenario A Contour Lines
 
 ```{r}
 
@@ -659,22 +698,14 @@ Cmat <- matrix(uCopA, nrow = length(x), ncol = length(y), byrow = FALSE)
 
 z  <- make_z_surface_blocked(x, y, Cmat, mean_waiting_time_A, block=200L)
 
-rp_50 <- 50 # return period in years
-xy50 <- grDevices::contourLines(x, y, z, levels = mu * rp_50)
-
-if (length(xy50) == 0) stop("No contour found for RP = ", rp_50)
-
-contourLines_A_50 <- do.call(rbind, lapply(seq_along(xy50), function(i){
-  data.frame(id=i, level=xy50[[i]]$level, marshalltown_cdf=xy50[[i]]$x, marengo_cdf=xy50[[i]]$y, rp = rp_50)
-}))
-
-
-rp_100 <- 100
-xy100 <- grDevices::contourLines(x, y, z, levels = mu * rp_100)
-
-contourLines_A_100 <- do.call(rbind, lapply(seq_along(xy100), function(i){
-  data.frame(id=i, level=xy100[[i]]$level, marshalltown_cdf=xy100[[i]]$x, marengo_cdf=xy100[[i]]$y, rp = rp_100)
-}))
+contourLines_A <- compute_contour_lines(
+  return_periods  = rp_vec,
+  x               = x,
+  y               = y,
+  z               = z,
+  mu              = mean_waiting_time_A,
+  stop_on_missing = TRUE   # set FALSE to skip missing RPs with a warning instead
+)
 ```
 
 ### Scenario B Return Period
@@ -690,22 +721,14 @@ Cmat <- matrix(uCopB, nrow = length(x), ncol = length(y), byrow = FALSE)
 
 z  <- make_z_surface_blocked(x, y, Cmat, mean_waiting_time_B, block=200L)
 
-rp_50 <- 50 # return period in years
-xy50 <- grDevices::contourLines(x, y, z, levels = mu * rp_50)
-
-if (length(xy50) == 0) stop("No contour found for RP = ", rp_50)
-
-contourLines_B_50 <- do.call(rbind, lapply(seq_along(xy50), function(i){
-  data.frame(id=i, level=xy50[[i]]$level, marshalltown_cdf=xy50[[i]]$x, marengo_cdf=xy50[[i]]$y, rp = rp_50)
-}))
-
-
-rp_100 <- 100
-xy100 <- grDevices::contourLines(x, y, z, levels = mu * rp_100)
-
-contourLines_B_100 <- do.call(rbind, lapply(seq_along(xy100), function(i){
-  data.frame(id=i, level=xy100[[i]]$level, marshalltown_cdf=xy100[[i]]$x, marengo_cdf=xy100[[i]]$y, rp = rp_100)
-}))
+contourLines_B <- compute_contour_lines(
+  return_periods  = rp_vec,
+  x               = x,
+  y               = y,
+  z               = z,
+  mu              = mean_waiting_time_B,
+  stop_on_missing = TRUE   # set FALSE to skip missing RPs with a warning instead
+)
 ```
 
 ## Transform Variates to Original Scale
@@ -714,7 +737,6 @@ contourLines_B_100 <- do.call(rbind, lapply(seq_along(xy100), function(i){
 
 ```{r}
 
-contourLines_A <- rbind(contourLines_A_50, contourLines_A_100)
 p_pds <- contourLines_A$marshalltown_cdf
 p_marshalltown_A <- langbein_adjustment(rate_marshalltown, p_pds) # Annualized probabilities for Marshalltown
 
@@ -729,7 +751,6 @@ contourLines_A <- contourLines_A %>%
 
 ```{r}
 
-contourLines_B <- rbind(contourLines_B_50, contourLines_B_100)
 p_pds <- contourLines_B$marengo_cdf
 p_marengo_B <- langbein_adjustment(rate_marengo, p_pds) # Annualized probabilities for Marengo
 
@@ -750,9 +771,17 @@ ggplot(contourLines_A, aes(marshalltown, marengo, group = rp)) +
   xlab("Marshalltown Flow (cfs)") +
   ylab("Marengo Flow (cfs)") +
   ggtitle("Scenario A: Extremal Marshalltown Flows") +
-  xlim(0, 40000) +
-  ylim(0, 40000) +
-  coord_fixed(ratio = 1)
+  xlim(0, 80000) +
+  ylim(0, 80000) +
+  coord_fixed(ratio = 1) +
+   geomtextpath::geom_textpath(
+    aes(label = 1/rp, group = rp),
+    color = "black", # label color
+    linetype = 0,   # (or) linetype = 0
+    linewidth = 4,
+    text_smoothing = 10,     # helps spacing along the curve
+    vjust = -0.1
+  ) 
 
 ggplot(contourLines_B, aes(marengo, marshalltown, group = rp)) +
   geom_path(linewidth = 1) +
@@ -760,9 +789,17 @@ ggplot(contourLines_B, aes(marengo, marshalltown, group = rp)) +
   xlab("Marengo Flow (cfs)") +
   ylab("Marshalltown Flow (cfs)") +
   ggtitle("Scenario B: Extremal Marengo Flows") +
-  xlim(0, 50000) +
-  ylim(0, 50000) +
-  coord_fixed(ratio = 1)
+  xlim(0, 80000) +
+  ylim(0, 80000) +
+  coord_fixed(ratio = 1) +
+   geomtextpath::geom_textpath(
+    aes(label = 1/rp, group = rp),
+    color = "black", # label color
+    linetype = 0,   # (or) linetype = 0
+    linewidth = 4,
+    text_smoothing = 10,     # helps spacing along the curve
+    vjust = 1.2
+  ) 
 
 contourLines_A_common_cols <- contourLines_A %>%
   select(rp, marshalltown, marengo, scenario)
@@ -770,20 +807,25 @@ contourLines_A_common_cols <- contourLines_A %>%
 contourLines_B_common_cols <- contourLines_B %>%
   select(rp, marshalltown, marengo, scenario)
 
-contourLines <- rbind(contourLines_A_common_cols, contourLines_B_common_cols)
+contourLines <- rbind(contourLines_A_common_cols, contourLines_B_common_cols) %>%
+  mutate(aep = 1/rp)
 
-ggplot(contourLines, aes(marshalltown, marengo, color = scenario, linetype = factor(rp))) +
+ggplot(contourLines, aes(marshalltown, marengo, color = scenario, linetype = factor(aep))) +
   geom_path(linewidth = 1) +
     scale_color_manual(values = c(
     "A" = "darkgreen",
     "B" = "purple")) +
-  scale_linetype_manual(values = c(
-    "50" = "dashed",
-    "100" = "solid")) +
-  xlim(0, 50000) +
-  ylim(0, 50000) +
+scale_linetype_manual(values = c(
+  "0.1"   = "longdash",
+  "0.02"  = "dashed",
+  "0.01"  = "solid",
+  "0.005" = "dotted",
+  "0.002" = "dotdash"
+)) +
+  xlim(0, 80000) +
+  ylim(0, 80000) +
   theme_bw() +
-  labs(color = "Scenario", linetype = "Return Period (years)") +
+  labs(color = "Scenario", linetype = "Annual Exceedance Probability") +
   xlab("Marshalltown Flow (cfs)") +
   ylab("Marengo Flow (cfs)") +
   ggtitle("") +
@@ -839,6 +881,7 @@ make_envelope <- function(df_rp, n_grid = 500L) {
   # Return a table
   tibble(
     rp = unique(df_rp$rp),
+    aep = unique(df_rp$aep),
     marshalltown = xg,
     marengo = yenv) %>%
     dplyr::filter(marshalltown >= 0, marengo >= 0)
@@ -850,7 +893,7 @@ Apply make_envelope function to combine isolines in contourLines into an envelop
 ```{r}
 
 envelope_curves <- contourLines %>%
-  group_by(rp) %>%
+  group_by(aep) %>%
   group_split() %>%
   map_dfr(make_envelope)
 
@@ -864,27 +907,32 @@ envelope_curves
 contourLinesPlot <- ggplot() +
   geom_path(
     data = contourLines,
-    aes(marshalltown, marengo, color = scenario, linetype = factor(rp)),
+    aes(marshalltown, marengo, color = scenario, linetype = factor(aep)),
     linewidth = 0.8, alpha = 0.7
   ) +
   geom_path(
     data = envelope_curves,
-    aes(marshalltown, marengo, linetype = factor(rp)),
+    aes(marshalltown, marengo, linetype = factor(aep)),
     color = "black", linewidth = 1.2
   ) +
   scale_color_manual(values = c(
     "A" = "darkgreen",
     "B" = "purple"
   )) +
-  scale_linetype_manual(values = c(
-    "50"  = "dashed",
-    "100" = "solid"
-  )) +
+scale_linetype_manual(values = c(
+  "0.1"   = "longdash",
+  "0.02"  = "dashed",
+  "0.01"  = "solid",
+  "0.005" = "dotted",
+  "0.002" = "dotdash"
+)) +
   theme_bw() +
   coord_fixed(ratio = 1) +
+  xlim(0, 80000) +
+  ylim(0, 80000) +
   labs(
     color = "Scenario",
-    linetype = "Return Period (years)",
+    linetype = "Annual Exceedance Probability",
     x = "Marshalltown Flow (cfs)",
     y = "Marengo Flow (cfs)"
   )
@@ -1013,78 +1061,86 @@ extract_design_events_2d <- function(Iso, prediction, N_Ensemble = 0) {
 }
 ```
 
-## KDE and Design Event for 1/100 AEP Contour
+## KDE and Design Event
 
 ```{r}
-Iso100 <- envelope_curves %>% dplyr::filter(rp == 100)   # or filter(scenario=="A", rp==100)
 
-kde_out100 <- kde_along_isoline(
-  Iso = Iso100,
-  cop_sample = copula_sample,     # columns: Marshalltown, Marengo
-  gridsize = c(400, 400)
-)
+compute_isoline_results <- function(
+    return_periods,
+    envelope_curves,
+    copula_sample,
+    N_Ensemble = 200,
+    Source     = "Sample",
+    Sim_Max    = 10,
+    gridsize   = c(400, 400)
+) {
+  # ── 1. Filter to requested RPs and split into a list of data frames ──────────
+  iso_list <- envelope_curves %>%
+    dplyr::filter(rp %in% return_periods) %>%
+    dplyr::group_by(rp) %>%
+    dplyr::group_split()
 
-design100 <- extract_design_events_2d(Iso100, kde_out100$prediction, N_Ensemble = 200)
-designEvent100 <- design100$MostLikelyEvent
+  # Name each element by its RP value for easy downstream access
+  rp_vals       <- purrr::map_dbl(iso_list, ~ unique(.x$rp))
+  names(iso_list) <- as.character(rp_vals)
 
-contourLines_kde_100 <- envelope_curves %>%
-  dplyr::group_by(rp) %>%
-  dplyr::group_split() %>%
-  purrr::map_dfr(function(df_iso) {
+  # ── 2. For each RP: KDE along isoline + most-likely design event ─────────────
+  purrr::map(iso_list, function(df_iso) {
 
-    kde_out_i <- kde_along_isoline(
+    kde_out <- kde_along_isoline(
       Iso        = df_iso,
       cop_sample = copula_sample,
-      Source     = "Sample",
-      Sim_Max    = 10,
-      gridsize   = c(400, 400)
+      Source     = Source,
+      Sim_Max    = Sim_Max,
+      gridsize   = gridsize
     )
 
-    stopifnot(length(kde_out_i$prediction) == nrow(df_iso))
+    stopifnot(length(kde_out$prediction) == nrow(df_iso))
 
-    df_iso %>%
-      dplyr::mutate(
-        kde        = kde_out_i$prediction,
-        kde_scaled = kde_out_i$contour
-      )
+    design <- extract_design_events_2d(
+      df_iso,
+      kde_out$prediction,
+      N_Ensemble = N_Ensemble
+    )
+
+    list(
+      isoline      = df_iso %>%
+                       dplyr::mutate(
+                         kde        = kde_out$prediction,
+                         kde_scaled = kde_out$contour
+                       ),
+      kde_out      = kde_out,
+      design       = design,
+      design_event = design$MostLikelyEvent
+    )
   })
-```
+}
 
-## KDE and Design Event for 1/50 AEP Contour
-
-```{r}
-Iso50 <- envelope_curves %>% dplyr::filter(rp == 50)   
-
-kde_out50 <- kde_along_isoline(
-  Iso = Iso50,
-  cop_sample = copula_sample,     # columns: Marshalltown, Marengo
-  gridsize = c(400, 400)
+# ── Run everything in one call ─────────────────────────────────────────────────
+iso_results <- compute_isoline_results(
+  return_periods  = rp_vec,
+  envelope_curves = envelope_curves,
+  copula_sample   = copula_sample,
+  N_Ensemble      = 200,
+  gridsize        = c(400, 400)
 )
 
-design50 <- extract_design_events_2d(Iso50, kde_out50$prediction, N_Ensemble = 200)
-designEvent50 <- design50$MostLikelyEvent
+# ── Flatten all KDE-annotated isolines into one tidy data frame ───────────────
+contourLines_kde <- purrr::map_dfr(
+  iso_results,
+  ~ .x$isoline,
+  .id = "rp"                        # adds a character column "rp"
+) %>%
+  dplyr::mutate(rp = as.numeric(rp),
+                aep = 1/rp)
 
-contourLines_kde_50 <- envelope_curves %>%
-  dplyr::group_by(rp) %>%
-  dplyr::group_split() %>%
-  purrr::map_dfr(function(df_iso) {
-
-    kde_out_i <- kde_along_isoline(
-      Iso        = df_iso,
-      cop_sample = copula_sample,
-      Source     = "Sample",
-      Sim_Max    = 10,
-      gridsize   = c(400, 400)
-    )
-
-    stopifnot(length(kde_out_i$prediction) == nrow(df_iso))
-
-    df_iso %>%
-      dplyr::mutate(
-        kde        = kde_out_i$prediction,
-        kde_scaled = kde_out_i$contour
-      )
-  })
+# ── Flatten all design events into one data frame ─────────────────────────────
+design_events_all <- purrr::map_dfr(
+  iso_results,
+  ~ .x$design_event,
+  .id = "rp"
+) %>%
+  dplyr::mutate(rp = as.numeric(rp))
 ```
 
 # Final Plot
@@ -1110,58 +1166,126 @@ marengo_con_data <- marengo_con %>%
 data <- rbind(marshalltown_con_data, marengo_con_data) %>%
   select(Marshalltown, Marengo, Scenario)
 
-contourLines_kde_100 <- contourLines_kde_100 %>%
-  mutate(aep = 1/rp)
+contourLines_kde <- contourLines_kde %>%
+  dplyr::mutate(
+    aep        = format(1 / rp, scientific = FALSE),
+    path_group = paste(rp, id, sep = "_")            # <-- must be saved back
+  )
 
-ggplot(contourLines_kde_100, aes(marshalltown, marengo)) +
-    geom_point(
+names(contourLines_kde)
+
+ggplot() +
+  geom_point(
     data = head(copula_sample, n = 10000),
     aes(x = Marshalltown, y = Marengo),
     inherit.aes = FALSE,
     color = "darkgrey", shape = 21
   ) +
-  geom_path(aes(group = aep, color = kde_scaled), size = 1.2) +
-  scale_color_distiller(palette = "RdYlBu", direction = -1,
-                        name = "Relative Probability Density", limits = c(0, 1)) +
+  geom_path(data = contourLines_kde, aes(x = marshalltown, y = marengo, group = aep, color = kde_scaled), linewidth = 1.2) +
+  scale_color_distiller(
+    palette = "RdYlBu", direction = -1,
+    name = "Relative Probability Density", limits = c(0, 1)
+  ) +
+  ggnewscale::new_scale_color() +
   geom_point(
     data = data,
-    aes(x = Marshalltown, y = Marengo, shape = Scenario),
+    aes(x = Marshalltown, y = Marengo, shape = Scenario, color = Scenario),
     inherit.aes = FALSE,
-    color = c(Marshalltown_Conditioning = "darkgreen", Marengo_Conditioning = "purple")[data$Scenario],
     size = 2, stroke = 1
   ) +
-  scale_shape_manual(values = c(Marshalltown_Conditioning = 1, Marengo_Conditioning = 4), name = "Scenario") +
-geom_point(
-    data = design100$MostLikelyEvent,
-    aes(x = marshalltown, y = marengo, fill = "Most Likely Event"),
-    inherit.aes = FALSE,
-    color = "black",
-    shape = 23,
-    linewidth = 2,
-    stroke = 1.1
+  scale_shape_manual(
+    values = c(Marshalltown_Conditioning = 1, Marengo_Conditioning = 4),
+    name = "Scenario"
+  ) +
+  scale_color_manual(
+    values = c(Marshalltown_Conditioning = "darkgreen", Marengo_Conditioning = "purple"),
+    name = "Scenario"
   ) +
   geom_point(
-    data = design50$MostLikelyEvent,
-    aes(x = marshalltown, y = marengo, fill = "Most Likely Event"),
+    data = design_events_all,                                         # <-- single data frame
+    aes(x = marshalltown, y = marengo, fill = "Design Event"),
     inherit.aes = FALSE,
-    color = "black",
-    shape = 23,
-    linewidth = 2,
-    stroke = 1.1
+    color = "black", shape = 23, linewidth = 2, stroke = 1.1
   ) +
-    geomtextpath::geom_textpath(
-    aes(label = aep, group = rp, color = kde_scaled),
-    color = "black", # label color
-    linetype = 0,   # (or) linetype = 0
-    linewidth = 4,
-    text_smoothing = 10,     # helps spacing along the curve
-    vjust = -0.2
+  geom_label(                                                         # <-- label each diamond
+    data = design_events_all,
+    aes(x = marshalltown, y = marengo, label = paste0(rp, "-yr")),
+    inherit.aes = FALSE,
+    nudge_y = 1500, size = 2.5, label.size = NA, fill = NA
   ) +
-  scale_fill_manual(
-    values = c("Most Likely Event" = "red"),
-    name = ""
+  geomtextpath::geom_textpath(
+    data = contourLines_kde,
+    aes(x = marshalltown, y = marengo,
+        label = aep, group = path_group),       # <-- pre-computed character column
+    color          = "black",
+    linetype       = 0,
+    size           = 4,
+    text_smoothing = 10,
+    vjust          = -0.2
   ) +
-    theme_bw() + coord_fixed(1) +
+  scale_fill_manual(values = c("Design Event" = "red"), name = "") +
+  theme_bw() + coord_fixed(1) +
   xlim(0, 80000) + ylim(0, 80000) +
-  labs(x = "Marshalltown Flow (cfs)", y = "Marengo Flow (cfs)") 
+  labs(x = "Marshalltown Flow (cfs)", y = "Marengo Flow (cfs)")
+```
+
+# Demo Figures
+
+Unit Square
+
+```{r}
+library(ggplot2)
+
+n_x <- 20
+n_y <- 20
+
+x_breaks <- seq(0, 1, length.out = n_x + 1)
+y_breaks <- seq(0, 1, length.out = n_y + 1)
+
+grid_pts <- expand.grid(x = x_breaks, y = y_breaks)
+
+ggplot() +
+  # Lines placed exactly at break positions
+  geom_vline(xintercept = x_breaks, color = "steelblue", linewidth = 0.3) +
+  geom_hline(yintercept = y_breaks, color = "steelblue", linewidth = 0.3) +
+  # Circles at every (x_break, y_break) crossing
+  geom_point(
+    data  = grid_pts,
+    aes(x, y),
+    shape = 21,
+    fill  = "black",
+    color = "black",
+    size  = 2
+  ) +
+  coord_fixed(xlim = c(-0.1, 1.1), ylim = c(-0.1, 1.1), expand = FALSE) +
+  theme_minimal() +
+  labs(
+    title = sprintf("", n_x, n_y),
+    x = "x", y = "y"
+  )
+```
+
+## Observed Samples
+
+```{r}
+
+
+ggplot(contourLines_kde_100, aes(marshalltown, marengo)) +
+  geom_point(
+    data = data,
+    aes(x = Marshalltown, y = Marengo, shape = Scenario, color = Scenario),  # color mapped as aesthetic
+    inherit.aes = FALSE,
+    size = 2, stroke = 1
+  ) +
+  scale_shape_manual(
+    values = c(Marshalltown_Conditioning = 1, Marengo_Conditioning = 4),
+    name = "Scenario"
+  ) +
+  scale_color_manual(                                                          # new: drives legend colors
+    values = c(Marshalltown_Conditioning = "darkgreen", Marengo_Conditioning = "purple"),
+    name = "Scenario"                                                          # same name = merged legend
+  ) +
+  theme_bw() + coord_fixed(1) +
+  xlim(0, 80000) + ylim(0, 80000) +
+  labs(x = "Marshalltown Flow (cfs)", y = "Marengo Flow (cfs)")
 ```
