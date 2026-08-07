@@ -1,0 +1,118 @@
+---
+title: "ordinal_association"
+author: "Avital Breverman"
+format: html
+editor: visual
+---
+
+```{r}
+rm(list = ls())
+
+library(dssrip2)
+library(MultiHazard)
+library(dplyr)
+
+options(java.parameters = "-Xmx16000M")
+dss_connect("C:/Programs/hec-monolith", monolith = TRUE)
+```
+
+# Purpose
+
+Determine ordinal association as computed using Kendall's tau between two variables (flow and precipitation) over a range of lags. The lag that produces the highest Kendall's tau is used to identify events that are coincident with the extremal events.
+
+# Import Data
+
+```{r}
+setwd("C:/Projects/Neptune/CopulaAnalysis/Examples/TygartPhillippiInteriorDrainage")
+dss_file_path <- "C:/Projects/Neptune/CopulaAnalysis/Examples/TygartPhillippiInteriorDrainage/Phillippi/Phillippi.dss"
+
+dss_paths <- dssrip2::dss_catalog(dss_file_path)
+dss_paths
+
+# Rolling 3-day accumulation of precipitation (USC00466982)
+precipitation_3day_accumulation <- dss_read(dss_file_path, dss_paths[10])
+
+# Annual max 3-day precipitation
+precipitation_3day_ams <- dss_read(dss_file_path, dss_paths[9])
+
+# Daily flow (USGS 03054500)
+flow_daily <- dss_read(dss_file_path, dss_paths[1])
+
+# Annual max daily flow
+flow_daily_ams <- dss_read(dss_file_path, dss_paths[2])
+```
+
+# Create Dataframe
+
+```{r}
+
+continuous_time_series <- left_join(flow_daily, precipitation_3day_accumulation, by = "datetime") %>%
+  na.omit()
+```
+
+# Rank Association
+
+Use the MultiHazard package's Kendall_Lag function to compute Kendall's tau and p-values over a range of lags (-4 to +4 days, incremented by 1 day).
+
+```{r}
+lag <- 4 # days
+
+# Calculate Kendall's tau at different lags
+kendall_tau_lag_results <- MultiHazard::Kendall_Lag(Data = continuous_time_series,
+                      Lags = seq(-lag, lag, 1),  
+                      PLOT = TRUE, # display plot
+                      GAP = 0.1) # length of y-axis above and below max and min                                       
+
+tau_values <- kendall_tau_lag_results$Value
+p_values <- kendall_tau_lag_results$Test
+
+# View tau coefficients
+print(tau_values)
+print(p_values)
+```
+
+# Apply the Lag
+
+```{r}
+
+continuous_time_series <- continuous_time_series %>%
+  mutate(precipitation_lag_plus1day = lead(precipitation, 1),
+         flow_lag_minus1day = lag(flow, 1))
+
+flow_dominant <- continuous_time_series %>%
+  mutate(
+    datetime = as.Date(datetime),
+    water_year = if_else(
+      format(datetime, "%m-%d") >= "10-01",
+      as.integer(format(datetime, "%Y")) + 1L,
+      as.integer(format(datetime, "%Y"))
+    )
+  ) %>%
+  group_by(water_year) %>%
+  slice_max(order_by = flow, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  select(water_year, datetime, flow, precipitation_lag_plus1day)
+
+
+precipitation_dominant <- continuous_time_series %>%
+  mutate(
+    datetime = as.Date(datetime),
+    water_year = if_else(
+      format(datetime, "%m-%d") >= "10-01",
+      as.integer(format(datetime, "%Y")) + 1L,
+      as.integer(format(datetime, "%Y"))
+    )
+  ) %>%
+  group_by(water_year) %>%
+  slice_max(order_by = precipitation, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  select(water_year, datetime, precipitation, flow_lag_minus1day)
+
+```
+
+# Write Datasets to csv
+
+```{r}
+write.csv(flow_dominant, file = "flow_dominant.csv")
+write.csv(precipitation_dominant, file = "precipitation_dominant.csv")
+```
