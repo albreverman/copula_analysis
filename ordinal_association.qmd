@@ -11,6 +11,7 @@ rm(list = ls())
 library(dssrip2)
 library(MultiHazard)
 library(dplyr)
+library(ggplot2)
 
 options(java.parameters = "-Xmx16000M")
 dss_connect("C:/Programs/hec-monolith", monolith = TRUE)
@@ -18,48 +19,73 @@ dss_connect("C:/Programs/hec-monolith", monolith = TRUE)
 
 # Purpose
 
-Determine ordinal association as computed using Kendall's tau between two variables (flow and precipitation) over a range of lags. The lag that produces the highest Kendall's tau is used to identify events that are coincident with the extremal events.
+In this example, the two variables are river flow and precipitation. We will quantify the ordinal association between extreme events in one variable and near-coincident events in the other using Kendall’s tau. The analysis will be performed in both directions to address the following questions:
+
+-   What time lag between an extreme precipitation event and a high-flow event produces the strongest association?
+
+-   What time lag between an extreme river-flow event and a large precipitation event produces the strongest association?
+
+For each direction, we will evaluate a range of positive and negative time lags. The lag associated with the highest Kendall’s tau will be interpreted as the temporal offset at which the extreme events are most strongly associated.
 
 # Import Data
 
 ```{r}
-setwd("C:/Projects/Neptune/CopulaAnalysis/Examples/TygartPhillippiInteriorDrainage")
-dss_file_path <- "C:/Projects/Neptune/CopulaAnalysis/Examples/TygartPhillippiInteriorDrainage/Phillippi/Phillippi.dss"
+setwd("C:/Projects/Neptune/CopulaAnalysis/Examples/")
+dss_file_path <- "C:/Projects/Neptune/CopulaAnalysis/Examples/Philippi_Interior_Drainage/Philippi_Interior_Drainage.dss"
 
 dss_paths <- dssrip2::dss_catalog(dss_file_path)
 dss_paths
 
 # Rolling 3-day accumulation of precipitation (USC00466982)
-precipitation_3day_accumulation <- dss_read(dss_file_path, dss_paths[10])
+precipitation_3day_accumulation <- dss_read(dss_file_path, dss_paths[6])
 
 # Annual max 3-day precipitation
-precipitation_3day_ams <- dss_read(dss_file_path, dss_paths[9])
+precipitation_3day_ams <- dss_read(dss_file_path, dss_paths[4])
 
 # Daily flow (USGS 03054500)
-flow_daily <- dss_read(dss_file_path, dss_paths[1])
+flow_daily <- dss_read(dss_file_path, dss_paths[8])
 
 # Annual max daily flow
-flow_daily_ams <- dss_read(dss_file_path, dss_paths[2])
+flow_daily_ams <- dss_read(dss_file_path, dss_paths[9])
 ```
 
-# Create Dataframe
+# Create Dataframes
 
 ```{r}
 
-continuous_time_series <- left_join(flow_daily, precipitation_3day_accumulation, by = "datetime") %>%
-  na.omit()
+precipitation_extremal <- left_join(precipitation_3day_ams, flow_daily, by = "datetime") %>% na.omit()
+
+flow_extremal <- left_join(flow_daily_ams, precipitation_3day_accumulation, by = "datetime") %>% na.omit()
 ```
 
-# Rank Association
+# Rank Association for Precipitation Extremal
 
-Use the MultiHazard package's Kendall_Lag function to compute Kendall's tau and p-values over a range of lags (-4 to +4 days, incremented by 1 day).
+Use the MultiHazard package's Kendall_Lag function to compute Kendall's tau and p-values over a range of lags (-5 to +5 days, incremented by 1 day).
 
 ```{r}
-lag <- 4 # days
+max_lag <- 5 # days
 
 # Calculate Kendall's tau at different lags
-kendall_tau_lag_results <- MultiHazard::Kendall_Lag(Data = continuous_time_series,
-                      Lags = seq(-lag, lag, 1),  
+kendall_tau_lag_results <- MultiHazard::Kendall_Lag(Data = precipitation_extremal,
+                      Lags = seq(-max_lag, max_lag, 1),  
+                      PLOT = TRUE, # display plot
+                      GAP = 0.1) # length of y-axis above and below max and min                                       
+
+tau_values <- kendall_tau_lag_results$Value
+p_values <- kendall_tau_lag_results$Test
+
+# View tau coefficients
+print(tau_values)
+print(p_values)
+```
+
+# Rank Association for Flow Extremal
+
+```{r}
+
+# Calculate Kendall's tau at different lags
+kendall_tau_lag_results <- MultiHazard::Kendall_Lag(Data = flow_extremal,
+                      Lags = seq(-max_lag, max_lag, 1),  
                       PLOT = TRUE, # display plot
                       GAP = 0.1) # length of y-axis above and below max and min                                       
 
@@ -73,46 +99,136 @@ print(p_values)
 
 # Apply the Lag
 
+Flows with the highest correlation to extremal precipitation occur one day after as the extremal precipitation.
+
+Precipitation events with the highest correlation to extremal flows occur on the same day as the extremal flows.
+
 ```{r}
+flow_extremal_lag_precip <- 0 # days
+precip_extremal_lag_flow <- 1 # days
 
-continuous_time_series <- continuous_time_series %>%
-  mutate(precipitation_lag_plus1day = lead(precipitation, 1),
-         flow_lag_minus1day = lag(flow, 1))
-
-flow_dominant <- continuous_time_series %>%
-  mutate(
-    datetime = as.Date(datetime),
-    water_year = if_else(
-      format(datetime, "%m-%d") >= "10-01",
-      as.integer(format(datetime, "%Y")) + 1L,
-      as.integer(format(datetime, "%Y"))
-    )
+# Prepare date-only daily time series for reliable joins.
+precipitation_daily <- precipitation_3day_accumulation %>%
+  transmute(
+    date = as.Date(datetime),
+    precipitation = precipitation
   ) %>%
-  group_by(water_year) %>%
-  slice_max(order_by = flow, n = 1, with_ties = FALSE) %>%
-  ungroup() %>%
-  select(water_year, datetime, flow, precipitation_lag_plus1day)
+  distinct(date, .keep_all = TRUE)
 
-
-precipitation_dominant <- continuous_time_series %>%
-  mutate(
-    datetime = as.Date(datetime),
-    water_year = if_else(
-      format(datetime, "%m-%d") >= "10-01",
-      as.integer(format(datetime, "%Y")) + 1L,
-      as.integer(format(datetime, "%Y"))
-    )
+flow_daily_values <- flow_daily %>%
+  transmute(
+    date = as.Date(datetime),
+    flow = flow
   ) %>%
-  group_by(water_year) %>%
-  slice_max(order_by = precipitation, n = 1, with_ties = FALSE) %>%
-  ungroup() %>%
-  select(water_year, datetime, precipitation, flow_lag_minus1day)
+  distinct(date, .keep_all = TRUE)
 
+# Prepare date-only annual-maxima event tables.
+flow_extremes <- flow_daily_ams %>%
+  transmute(
+    flow_event_date = as.Date(datetime),
+    flow_extreme = flow
+  ) %>%
+  distinct(flow_event_date, .keep_all = TRUE)
+
+precipitation_extremes <- precipitation_3day_ams %>%
+  transmute(
+    precipitation_event_date = as.Date(datetime),
+    precipitation_extreme = precipitation
+  ) %>%
+  distinct(precipitation_event_date, .keep_all = TRUE)
+
+```
+
+### **Pair each extremal flow with same-day precipitation**
+
+```{r}
+flow_extremal_pairs <- flow_extremes %>%
+  mutate(
+    precipitation_date = flow_event_date + flow_extremal_lag_precip
+  ) %>%
+  left_join(
+    precipitation_daily,
+    by = c("precipitation_date" = "date")
+  ) %>%
+  filter(!is.na(precipitation)) %>%
+  transmute(
+    precipitation_date,
+    flow_date = flow_event_date,
+    precipitation,
+    flow = flow_extreme,
+    event_type = "Extremal flow; same-day precipitation"
+  )
+```
+
+### **Pair each extremal precipitation event with next-day flow**
+
+```{r}
+precipitation_extremal_pairs <- precipitation_extremes %>%
+  mutate(
+    flow_date = precipitation_event_date + precip_extremal_lag_flow
+  ) %>%
+  left_join(
+    flow_daily_values,
+    by = c("flow_date" = "date")
+  ) %>%
+  filter(!is.na(flow)) %>%
+  transmute(
+    precipitation_date = precipitation_event_date,
+    flow_date,
+    precipitation = precipitation_extreme,
+    flow,
+    event_type = "Extremal precipitation; next-day flow"
+  )
+```
+
+```{r}
+event_pairs_plot <- bind_rows(
+  flow_extremal_pairs,
+  precipitation_extremal_pairs
+)
+
+ggplot(
+  event_pairs_plot,
+  aes(
+    x = precipitation,
+    y = flow,
+    color = event_type,
+    shape = event_type
+  )
+) +
+  geom_point(size = 3, alpha = 0.8) +
+  scale_color_manual(
+    values = c(
+      "Extremal flow; same-day precipitation" = "blue",
+      "Extremal precipitation; next-day flow" = "red"
+    )
+  ) +
+  scale_shape_manual(
+    values = c(
+      "Extremal flow; same-day precipitation" = 16,
+      "Extremal precipitation; next-day flow" = 15
+    )
+  ) +
+  labs(
+    title = "Precipitation–Flow Event Pairs",
+    subtitle = paste0(
+      "Extremal-flow to precipitation lag: ", flow_extremal_lag_precip,
+      " days; extremal-precipitation to flow lag: ",
+      precip_extremal_lag_flow, " day"
+    ),
+    x = "3-Day Precipitation",
+    y = "Daily Flow",
+    color = "Event Pair",
+    shape = "Event Pair"
+  ) +
+  theme_minimal()
 ```
 
 # Write Datasets to csv
 
 ```{r}
-write.csv(flow_dominant, file = "flow_dominant.csv")
-write.csv(precipitation_dominant, file = "precipitation_dominant.csv")
+write.csv(flow_extremal_pairs, file = "flow_dominant.csv")
+write.csv(precipitation_extremal_pairs, file = "precipitation_dominant.csv")
 ```
+
+# 
